@@ -56,6 +56,8 @@ BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
 INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "2"))
 ECOFLOW_READY = bool(ACCESS_KEY and SECRET_KEY and SN_DELTA2)
+START_TIME = time.time()
+AUTO_PAUSED = False
 if not ECOFLOW_READY:
     log.warning(
         "EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2); "
@@ -186,7 +188,11 @@ def send_telegram(text: str, chat_id: str = None) -> None:
 def set_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Qué hace este bot"},
-        {"command": "reporte", "description": "Consultar el estado ahora mismo"},
+        {"command": "reporte", "description": "Informe detallado por dispositivo"},
+        {"command": "estado", "description": "Línea rápida combinada"},
+        {"command": "pausa", "description": "Pausar los informes automáticos"},
+        {"command": "reanudar", "description": "Reanudar los informes automáticos"},
+        {"command": "ping", "description": "Ver si el bot está activo"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
     resp = requests.post(
@@ -228,6 +234,33 @@ def build_report() -> str:
     return "\n\n".join(sections)
 
 
+def build_quick_status() -> str:
+    """Línea compacta y combinada: carga de ambas baterías + entrada solar. Para /estado."""
+    if not ECOFLOW_READY:
+        return "⏳ EcoFlow todavía no está configurado."
+
+    parts = []
+    try:
+        data = get_device_quota(SN_DELTA2)
+        soc = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
+        pv_w = _pick(data, "mppt.inWatts")
+        pv_w = round(pv_w / 10, 1) if pv_w is not None else None
+        parts.append(f"Delta 2 {soc if soc is not None else 'N/D'}%")
+        parts.append(f"☀️ {pv_w if pv_w is not None else 'N/D'} W")
+    except Exception as exc:
+        parts.append(f"Delta 2 ⚠️ {exc}")
+
+    if SN_EXTRA:
+        try:
+            data = get_device_quota(SN_EXTRA)
+            soc = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
+            parts.append(f"Extra {soc if soc is not None else 'N/D'}%")
+        except Exception as exc:
+            parts.append(f"Extra ⚠️ {exc}")
+
+    return "🔋 " + " · ".join(parts)
+
+
 def run_once() -> None:
     report = build_report()
     send_telegram(report)
@@ -236,10 +269,14 @@ def run_once() -> None:
 
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
-    "/reporte — estado actual de la Delta 2 y la batería extra\n"
+    "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
+    "/estado — línea rápida combinada (carga de ambas + solar)\n"
+    "/pausa — pausar los informes automáticos\n"
+    "/reanudar — reanudar los informes automáticos\n"
+    "/ping — ver si el bot está activo\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
-    f"Reporte automático cada {INTERVAL_HOURS:g}h."
+    f"Reporte automático cada {INTERVAL_HOURS:g}h (si no está pausado)."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
@@ -248,10 +285,33 @@ START_TEXT = (
 )
 
 
+def _format_uptime() -> str:
+    seconds = int(time.time() - START_TIME)
+    hours, rem = divmod(seconds, 3600)
+    minutes = rem // 60
+    return f"{hours}h {minutes}m"
+
+
 def handle_command(text: str, chat_id: str) -> None:
+    global AUTO_PAUSED
     cmd = text.strip().split()[0].split("@")[0].lower()
     if cmd == "/reporte":
         send_telegram(build_report(), chat_id=chat_id)
+    elif cmd == "/estado":
+        send_telegram(build_quick_status(), chat_id=chat_id)
+    elif cmd == "/pausa":
+        AUTO_PAUSED = True
+        send_telegram("⏸ Informes automáticos pausados. Usá /reanudar para reactivarlos.", chat_id=chat_id)
+    elif cmd == "/reanudar":
+        AUTO_PAUSED = False
+        send_telegram("▶️ Informes automáticos reanudados.", chat_id=chat_id)
+    elif cmd == "/ping":
+        estado_ecoflow = "🟢 EcoFlow configurado" if ECOFLOW_READY else "⏳ EcoFlow sin configurar"
+        estado_auto = "⏸ pausado" if AUTO_PAUSED else "▶️ activo"
+        send_telegram(
+            f"🏓 Pong. Activo hace {_format_uptime()}.\n{estado_ecoflow} · Automático {estado_auto}",
+            chat_id=chat_id,
+        )
     elif cmd == "/start":
         send_telegram(START_TEXT, chat_id=chat_id)
     elif cmd == "/help":
@@ -307,6 +367,8 @@ def main() -> None:
     while True:
         if not ECOFLOW_READY:
             log.info("EcoFlow no configurado; se omite el informe automático de este ciclo")
+        elif AUTO_PAUSED:
+            log.info("Informes automáticos pausados; se omite este ciclo")
         else:
             try:
                 run_once()
