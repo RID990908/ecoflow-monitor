@@ -22,6 +22,7 @@ import logging
 import os
 import random
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -161,16 +162,30 @@ def format_extra_battery_report(data: dict, online: bool) -> str:
     return "\n".join(lines)
 
 
-def send_telegram(text: str) -> None:
+def send_telegram(text: str, chat_id: str = None) -> None:
     resp = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"},
+        json={"chat_id": chat_id or CHAT_ID, "text": text, "parse_mode": "Markdown"},
         timeout=30,
     )
     resp.raise_for_status()
     payload = resp.json()
     if not payload.get("ok"):
         raise RuntimeError(f"Telegram API error: {payload}")
+
+
+def set_bot_commands() -> None:
+    commands = [
+        {"command": "start", "description": "Qué hace este bot"},
+        {"command": "reporte", "description": "Consultar el estado ahora mismo"},
+        {"command": "help", "description": "Ver comandos disponibles"},
+    ]
+    resp = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
+        json={"commands": commands},
+        timeout=30,
+    )
+    resp.raise_for_status()
 
 
 def build_report() -> str:
@@ -203,10 +218,74 @@ def run_once() -> None:
     log.info("Informe enviado")
 
 
+HELP_TEXT = (
+    "🤖 *Monitor EcoFlow*\n\n"
+    "/reporte — estado actual de la Delta 2 y la batería extra\n"
+    "/start — qué hace este bot\n"
+    "/help — ver esta ayuda\n\n"
+    f"Reporte automático cada {INTERVAL_HOURS:g}h."
+)
+START_TEXT = (
+    "👋 Hola, soy el monitor de tu EcoFlow.\n"
+    f"Te mando un reporte automático cada {INTERVAL_HOURS:g}h con la carga de la "
+    "Delta 2, la batería extra y la entrada solar.\n\n" + HELP_TEXT
+)
+
+
+def handle_command(text: str, chat_id: str) -> None:
+    cmd = text.strip().split()[0].split("@")[0].lower()
+    if cmd == "/reporte":
+        send_telegram(build_report(), chat_id=chat_id)
+    elif cmd == "/start":
+        send_telegram(START_TEXT, chat_id=chat_id)
+    elif cmd == "/help":
+        send_telegram(HELP_TEXT, chat_id=chat_id)
+
+
+def poll_commands() -> None:
+    """Escucha comandos entrantes (long polling) y responde. Ignora chats que no sean el configurado."""
+    offset = 0
+    while True:
+        try:
+            resp = requests.get(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
+                params={"offset": offset, "timeout": 30},
+                timeout=40,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            for update in payload.get("result", []):
+                offset = update["update_id"] + 1
+                message = update.get("message", {})
+                text = message.get("text", "")
+                chat_id = str(message.get("chat", {}).get("id", ""))
+                if not text.startswith("/"):
+                    continue
+                if chat_id != CHAT_ID:
+                    log.info("Comando ignorado de chat no autorizado: %s", chat_id)
+                    continue
+                try:
+                    handle_command(text, chat_id)
+                except Exception:
+                    log.exception("Error respondiendo comando %s", text)
+        except Exception:
+            log.exception("Error en el polling de comandos; reintento")
+            time.sleep(5)
+
+
 def main() -> None:
     if "--once" in sys.argv:
         run_once()
         return
+
+    try:
+        set_bot_commands()
+    except Exception:
+        log.exception("No se pudo registrar el menú de comandos (no bloqueante)")
+
+    poll_thread = threading.Thread(target=poll_commands, daemon=True)
+    poll_thread.start()
+
     interval_s = INTERVAL_HOURS * 3600
     log.info("Iniciando monitoreo cada %.1f horas", INTERVAL_HOURS)
     while True:
