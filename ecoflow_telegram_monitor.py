@@ -45,13 +45,22 @@ def require_env(name: str) -> str:
     return value
 
 
-ACCESS_KEY = require_env("ECOFLOW_ACCESS_KEY")
-SECRET_KEY = require_env("ECOFLOW_SECRET_KEY")
-SN_DELTA2 = require_env("ECOFLOW_SN_DELTA2")
+# Las credenciales de EcoFlow son opcionales al arrancar: el bot debe poder
+# responder /start y /help aunque todavía no estén (p. ej. mientras se espera
+# la aprobación del programa developer). Se validan recién al armar el reporte.
+ACCESS_KEY = os.environ.get("ECOFLOW_ACCESS_KEY", "").strip()
+SECRET_KEY = os.environ.get("ECOFLOW_SECRET_KEY", "").strip()
+SN_DELTA2 = os.environ.get("ECOFLOW_SN_DELTA2", "").strip()
 SN_EXTRA = os.environ.get("ECOFLOW_SN_EXTRA", "").strip()
 BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
 INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "2"))
+ECOFLOW_READY = bool(ACCESS_KEY and SECRET_KEY and SN_DELTA2)
+if not ECOFLOW_READY:
+    log.warning(
+        "EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2); "
+        "el bot responde comandos de Telegram pero /reporte no va a poder consultar el dispositivo."
+    )
 
 
 def _flatten(obj, prefix=""):
@@ -192,6 +201,13 @@ def build_report() -> str:
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
     sections = [f"📊 *Informe EcoFlow* — {now}"]
 
+    if not ECOFLOW_READY:
+        sections.append(
+            "⏳ EcoFlow todavía no está configurado (esperando ACCESS_KEY/SECRET_KEY "
+            "de developer.ecoflow.com). Avisá cuando estén listas."
+        )
+        return "\n\n".join(sections)
+
     try:
         online = get_device_online(SN_DELTA2)
         data = get_device_quota(SN_DELTA2)
@@ -289,14 +305,17 @@ def main() -> None:
     interval_s = INTERVAL_HOURS * 3600
     log.info("Iniciando monitoreo cada %.1f horas", INTERVAL_HOURS)
     while True:
-        try:
-            run_once()
-        except Exception:
-            log.exception("Fallo en el ciclo de informe; reintento en el próximo ciclo")
+        if not ECOFLOW_READY:
+            log.info("EcoFlow no configurado; se omite el informe automático de este ciclo")
+        else:
             try:
-                send_telegram("⚠️ Fallo al generar el informe EcoFlow. Revisa los logs.")
+                run_once()
             except Exception:
-                log.exception("Tampoco se pudo notificar el error por Telegram")
+                log.exception("Fallo en el ciclo de informe; reintento en el próximo ciclo")
+                try:
+                    send_telegram("⚠️ Fallo al generar el informe EcoFlow. Revisa los logs.")
+                except Exception:
+                    log.exception("Tampoco se pudo notificar el error por Telegram")
         time.sleep(interval_s)
 
 
