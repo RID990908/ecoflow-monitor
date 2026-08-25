@@ -1,0 +1,21 @@
+# Servicio systemd (opcional, para Linux/Raspberry Pi).
+# 1. Ajusta la ruta de WorkingDirectory/ExecStart a donde dejes la carpeta.
+# 2. sudo cp ecoflow-monitor.service /etc/systemd/system/
+# 3. sudo systemctl daemon-reload
+# 4. sudo systemctl enable --now ecoflow-monitor
+# Logs: journalctl -u ecoflow-monitor -f
+
+[Unit]
+Description=Monitor EcoFlow -> Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/ecoflow
+ExecStart=/home/pi/ecoflow/start.sh
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
