@@ -203,6 +203,19 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
+# Delta 2 y batería extra son de la misma capacidad (1024Wh cada una), así que
+# el promedio simple de sus %SOC es válido: ambas pesan lo mismo en el total.
+BATTERY_CAPACITY_WH = 1024
+
+
+def _combined_line(soc_delta2, soc_extra) -> str:
+    if soc_delta2 is None or soc_extra is None:
+        return ""
+    avg = round((soc_delta2 + soc_extra) / 2, 1)
+    total_wh = round(avg / 100 * BATTERY_CAPACITY_WH * 2)
+    return f"🔷 *Total combinado*: *{avg}%* (~{total_wh} Wh de {BATTERY_CAPACITY_WH * 2} Wh)"
+
+
 def build_report() -> str:
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
     sections = [f"📊 *Informe EcoFlow* — {now}"]
@@ -214,9 +227,13 @@ def build_report() -> str:
         )
         return "\n\n".join(sections)
 
+    soc_delta2 = None
+    soc_extra = None
+
     try:
         online = get_device_online(SN_DELTA2)
         data = get_device_quota(SN_DELTA2)
+        soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
         sections.append(format_delta2_report(data, online))
     except Exception as exc:
         log.exception("Error consultando la Delta 2")
@@ -226,10 +243,15 @@ def build_report() -> str:
         try:
             online = get_device_online(SN_EXTRA)
             data = get_device_quota(SN_EXTRA)
+            soc_extra = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
             sections.append(format_extra_battery_report(data, online))
         except Exception as exc:
             log.exception("Error consultando la batería extra")
             sections.append(f"🔋 *Batería extra*\n⚠️ Error al consultar: {exc}")
+
+    combined = _combined_line(soc_delta2, soc_extra)
+    if combined:
+        sections.append(combined)
 
     return "\n\n".join(sections)
 
@@ -240,12 +262,14 @@ def build_quick_status() -> str:
         return "⏳ EcoFlow todavía no está configurado."
 
     parts = []
+    soc_delta2 = None
+    soc_extra = None
     try:
         data = get_device_quota(SN_DELTA2)
-        soc = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
+        soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
         pv_w = _pick(data, "mppt.inWatts")
         pv_w = round(pv_w / 10, 1) if pv_w is not None else None
-        parts.append(f"Delta 2 {soc if soc is not None else 'N/D'}%")
+        parts.append(f"Delta 2 {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
         parts.append(f"☀️ {pv_w if pv_w is not None else 'N/D'} W")
     except Exception as exc:
         parts.append(f"Delta 2 ⚠️ {exc}")
@@ -253,10 +277,14 @@ def build_quick_status() -> str:
     if SN_EXTRA:
         try:
             data = get_device_quota(SN_EXTRA)
-            soc = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
-            parts.append(f"Extra {soc if soc is not None else 'N/D'}%")
+            soc_extra = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
+            parts.append(f"Extra {soc_extra if soc_extra is not None else 'N/D'}%")
         except Exception as exc:
             parts.append(f"Extra ⚠️ {exc}")
+
+    combined = _combined_line(soc_delta2, soc_extra)
+    if combined:
+        parts.append(f"Total {round((soc_delta2 + soc_extra) / 2, 1)}%")
 
     return "🔋 " + " · ".join(parts)
 
