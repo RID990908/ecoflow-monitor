@@ -58,6 +58,8 @@ INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "2"))
 ECOFLOW_READY = bool(ACCESS_KEY and SECRET_KEY and SN_DELTA2)
 START_TIME = time.time()
 AUTO_PAUSED = False
+AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "30"))
+AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
 if not ECOFLOW_READY:
     log.warning(
         "EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2); "
@@ -138,12 +140,21 @@ def _pick(data: dict, *keys, default=None):
     return default
 
 
+def get_pv_watts(data: dict):
+    pv_w = _pick(data, "mppt.inWatts")
+    return round(pv_w / 10, 1) if pv_w is not None else None  # viene en décimas de watt
+
+
+def get_ac_watts(data: dict):
+    """Potencia de entrada por corriente (cargador/pared), separada de la solar."""
+    return _pick(data, "inv.inputWatts")
+
+
 def format_delta2_report(data: dict, online: bool) -> str:
     soc = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
-    total_in_w = _pick(data, "pd.wattsInSum", "inv.inputWatts", default=0)
-    pv_w = _pick(data, "mppt.inWatts")
-    if pv_w is not None:
-        pv_w = round(pv_w / 10, 1)  # mppt.inWatts viene en décimas de watt
+    pv_w = get_pv_watts(data)
+    ac_w = get_ac_watts(data)
+    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
     temp = _pick(data, "bms_bmsStatus.temp", "inv.outTemp")
@@ -152,6 +163,7 @@ def format_delta2_report(data: dict, online: bool) -> str:
     if soc is not None:
         lines.append(f"Carga: *{soc}%*")
     lines.append(f"☀️ Entrada solar (MPPT): *{pv_w if pv_w is not None else 'N/D'} W*")
+    lines.append(f"🔌 Entrada por corriente (AC): *{ac_w if ac_w is not None else 'N/D'} W*")
     lines.append(f"⚡ Entrada total: {total_in_w} W · Salida: {out_w} W")
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
@@ -267,10 +279,11 @@ def build_quick_status() -> str:
     try:
         data = get_device_quota(SN_DELTA2)
         soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
-        pv_w = _pick(data, "mppt.inWatts")
-        pv_w = round(pv_w / 10, 1) if pv_w is not None else None
+        pv_w = get_pv_watts(data)
+        ac_w = get_ac_watts(data)
         parts.append(f"Delta 2 {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
         parts.append(f"☀️ {pv_w if pv_w is not None else 'N/D'} W")
+        parts.append(f"🔌 {ac_w if ac_w is not None else 'N/D'} W")
     except Exception as exc:
         parts.append(f"Delta 2 ⚠️ {exc}")
 
@@ -304,7 +317,8 @@ HELP_TEXT = (
     "/ping — ver si el bot está activo\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
-    f"Reporte automático cada {INTERVAL_HOURS:g}h (si no está pausado)."
+    f"Reporte automático cada {INTERVAL_HOURS:g}h (si no está pausado).\n"
+    f"⚡ Además te aviso apenas empiece a cargar por corriente (chequeo cada {AC_CHECK_MINUTES:g} min)."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
@@ -377,6 +391,26 @@ def poll_commands() -> None:
             time.sleep(5)
 
 
+def watch_ac_charging() -> None:
+    """Avisa apenas la Delta 2 empieza a cargar por corriente (AC), sin esperar al reporte periódico."""
+    was_charging = False
+    while True:
+        if not ECOFLOW_READY or AUTO_PAUSED:
+            time.sleep(AC_CHECK_MINUTES * 60)
+            continue
+        try:
+            data = get_device_quota(SN_DELTA2)
+            ac_w = get_ac_watts(data)
+            is_charging = bool(ac_w and ac_w > AC_WATTS_THRESHOLD)
+            if is_charging and not was_charging:
+                send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
+                log.info("Notificado inicio de carga AC (%s W)", ac_w)
+            was_charging = is_charging
+        except Exception:
+            log.exception("Error chequeando carga por AC; reintento en el próximo ciclo")
+        time.sleep(AC_CHECK_MINUTES * 60)
+
+
 def main() -> None:
     if "--once" in sys.argv:
         run_once()
@@ -389,6 +423,9 @@ def main() -> None:
 
     poll_thread = threading.Thread(target=poll_commands, daemon=True)
     poll_thread.start()
+
+    ac_thread = threading.Thread(target=watch_ac_charging, daemon=True)
+    ac_thread.start()
 
     interval_s = INTERVAL_HOURS * 3600
     log.info("Iniciando monitoreo cada %.1f horas", INTERVAL_HOURS)
