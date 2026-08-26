@@ -467,13 +467,13 @@ def _charge_source(pv_w, ac_w) -> tuple:
 
 
 def _battery_flow_emoji(net_w) -> tuple:
-    """(emoji_batería, sufijo_texto) según el neto: 🔋 + 🔌 si carga,
-    🪫 si descarga, 🔋 si no hay flujo."""
+    """(emoji_batería, etiqueta, sufijo_texto) según el neto: 🔋 + Carga + 🔌 si
+    carga, 🪫 + Descarga si descarga, 🔋 + Carga si no hay flujo."""
     if net_w is None or -NOISE_FLOOR_W <= net_w <= NOISE_FLOOR_W:
-        return "🔋", ""
+        return "🔋", "Carga", ""
     if net_w > NOISE_FLOOR_W:
-        return "🔋", f" 🔌 ({round(net_w)} W)"
-    return "🪫", f" ({abs(round(net_w))} W)"
+        return "🔋", "Carga", f" 🔌 ({round(net_w)} W)"
+    return "🪫", "Descarga", f" ({abs(round(net_w))} W)"
 
 
 # Delta 2 y batería extra son de la misma capacidad, así que el promedio
@@ -522,12 +522,12 @@ def build_report() -> str:
 
     lines = [f"📊 *Informe EcoFlow* · {status} · {source_emoji} {source_label}", ""]
 
-    delta2_emoji, delta2_suffix = _battery_flow_emoji(delta2_net_w)
+    delta2_emoji, delta2_label, delta2_suffix = _battery_flow_emoji(delta2_net_w)
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
-    lines.append(f"{delta2_emoji} Delta 2 — Carga: *{soc_delta2_str}%*{delta2_suffix}")
+    lines.append(f"{delta2_emoji} Delta 2 — {delta2_label}: *{soc_delta2_str}%*{delta2_suffix}")
     if soc_extra is not None:
-        extra_emoji, extra_suffix = _battery_flow_emoji(extra_net_w)
-        lines.append(f"{extra_emoji} Batería Extra — Carga: *{soc_extra:.1f}%*{extra_suffix}")
+        extra_emoji, extra_label, extra_suffix = _battery_flow_emoji(extra_net_w)
+        lines.append(f"{extra_emoji} Batería Extra — {extra_label}: *{soc_extra:.1f}%*{extra_suffix}")
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
