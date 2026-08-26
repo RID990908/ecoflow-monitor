@@ -400,14 +400,23 @@ def format_delta2_report(data: dict, online: bool) -> str:
     return "\n".join(lines)
 
 
-def format_extra_battery_report(data: dict, online: bool) -> str:
-    soc = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
-    temp = _pick(data, "bms_bmsStatus.temp", "bmsSlave.temp")
-    lines = [f"🔋 *Batería extra* {'🟢 en línea' if online else '🔴 desconectada'}"]
+def get_extra_battery_soc(data: dict):
+    """La batería extra no es un dispositivo aparte: sus datos (bms_slave.*)
+    vienen incluidos en la misma respuesta de la Delta 2."""
+    return _pick(data, "bms_slave.soc", "bms_slave.f32ShowSoc")
+
+
+def format_extra_battery_report(data: dict) -> str:
+    soc = get_extra_battery_soc(data)
+    temp = _pick(data, "bms_slave.temp")
+    amp = _pick(data, "bms_slave.inputWatts")
+    lines = ["🔋 *Batería extra*"]
     if soc is not None:
         lines.append(f"Carga: *{soc}%*")
     if temp is not None:
         lines.append(f"🌡 Temperatura: {temp}°C")
+    if amp is not None:
+        lines.append(f"🔌 Entrada: {amp} W")
     return "\n".join(lines)
 
 
@@ -471,19 +480,13 @@ def build_report() -> str:
         data = get_device_quota(SN_DELTA2)
         soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
         sections.append(format_delta2_report(data, online))
+
+        soc_extra = get_extra_battery_soc(data)
+        if soc_extra is not None:
+            sections.append(format_extra_battery_report(data))
     except Exception as exc:
         log.exception("Error consultando la Delta 2")
         sections.append(f"🔋 *Delta 2*\n⚠️ Error al consultar: {exc}")
-
-    if SN_EXTRA:
-        try:
-            online = get_device_online(SN_EXTRA)
-            data = get_device_quota(SN_EXTRA)
-            soc_extra = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
-            sections.append(format_extra_battery_report(data, online))
-        except Exception as exc:
-            log.exception("Error consultando la batería extra")
-            sections.append(f"🔋 *Batería extra*\n⚠️ Error al consultar: {exc}")
 
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
@@ -508,16 +511,12 @@ def build_quick_status() -> str:
         lines.append(f"🔋 Delta 2: {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
         lines.append(f"☀️ Solar (panel): {pv_w if pv_w is not None else 'N/D'} W")
         lines.append(f"🔌 Corriente (AC): {ac_w if ac_w is not None else 'N/D'} W")
+
+        soc_extra = get_extra_battery_soc(data)
+        if soc_extra is not None:
+            lines.append(f"🔋 Extra: {soc_extra}%")
     except Exception as exc:
         lines.append(f"🔋 Delta 2: ⚠️ {exc}")
-
-    if SN_EXTRA:
-        try:
-            data = get_device_quota(SN_EXTRA)
-            soc_extra = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
-            lines.append(f"🔋 Extra: {soc_extra if soc_extra is not None else 'N/D'}%")
-        except Exception as exc:
-            lines.append(f"🔋 Extra: ⚠️ {exc}")
 
     if soc_delta2 is not None and soc_extra is not None:
         lines.append(f"🔷 Total: {round((soc_delta2 + soc_extra) / 2, 1)}%")
