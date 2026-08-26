@@ -107,6 +107,7 @@ def _save_persisted_state() -> None:
                     "battery_low_threshold": BATTERY_LOW_THRESHOLD,
                     "was_below_low_threshold": WAS_BELOW_LOW_THRESHOLD,
                     "was_full": WAS_FULL,
+                    "last_ac_timestamp": LAST_AC_TIMESTAMP,
                 },
                 f,
             )
@@ -119,7 +120,14 @@ WAS_CHARGING_AC = _persisted.get("was_charging_ac", False)
 BATTERY_LOW_THRESHOLD = _persisted.get("battery_low_threshold", 20)
 WAS_BELOW_LOW_THRESHOLD = _persisted.get("was_below_low_threshold", False)
 WAS_FULL = _persisted.get("was_full", False)
+LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 _DATA_STALE_ALERTED = False
+
+# Trend contra el último informe generado (no se persiste: alcanza con que
+# sobreviva mientras el proceso está corriendo, se resetea en cada redeploy).
+_last_report_soc = None
+_last_report_at = None
+_last_report_lock = threading.Lock()
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
@@ -485,6 +493,41 @@ def _combined_line(soc_delta2, soc_extra) -> str:
     return f"🔋 *Total combinado*: *{avg:.1f}%*"
 
 
+def _format_elapsed(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes = rem // 60
+    if hours >= 24:
+        days, hours = divmod(hours, 24)
+        return f"{days}d {hours}h"
+    return f"{hours}h {minutes}m"
+
+
+def _last_ac_line() -> str:
+    if not LAST_AC_TIMESTAMP:
+        return "⚡ Última vez que llegó corriente: sin registro todavía"
+    return f"⚡ Última vez que llegó corriente: hace {_format_elapsed(time.time() - LAST_AC_TIMESTAMP)}"
+
+
+def _trend_line(soc_now) -> str:
+    """Compara contra el %SOC combinado del informe anterior (en memoria, se
+    resetea en cada redeploy) para mostrar si viene subiendo o bajando."""
+    global _last_report_soc, _last_report_at
+    line = ""
+    with _last_report_lock:
+        if soc_now is not None and _last_report_soc is not None and _last_report_at is not None:
+            elapsed = time.time() - _last_report_at
+            if elapsed >= 300:  # evita ruido si se pide /reporte dos veces seguidas
+                diff = round(soc_now - _last_report_soc, 1)
+                arrow = "📈" if diff > 0 else "📉" if diff < 0 else "➡️"
+                sign = "+" if diff > 0 else ""
+                line = f"{arrow} Tendencia: {sign}{diff}% en las últimas {_format_elapsed(elapsed)}"
+        if soc_now is not None:
+            _last_report_soc = soc_now
+            _last_report_at = time.time()
+    return line
+
+
 def build_report() -> str:
     if not ECOFLOW_READY:
         return (
@@ -531,9 +574,14 @@ def build_report() -> str:
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
+    soc_avg = round((soc_delta2 + soc_extra) / 2, 1) if soc_delta2 is not None and soc_extra is not None else soc_delta2
+    trend = _trend_line(soc_avg)
+    if trend:
+        lines.append(trend)
     lines.append("")
 
     lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(ac_w) + ' W)' if ac_w > NOISE_FLOOR_W else 'No'}")
+    lines.append(_last_ac_line())
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"📤 Salida: {out_w} W")
 
@@ -645,7 +693,7 @@ FULL_CHARGE_RESET_THRESHOLD = 95  # baja de esto para poder volver a avisar
 def ac_check_timer() -> None:
     """Chequea, en un mismo ciclo: si llegó la corriente, si la carga bajó del
     umbral configurado con /alerta, y si terminó de cargar (100%)."""
-    global WAS_CHARGING_AC, WAS_BELOW_LOW_THRESHOLD, WAS_FULL
+    global WAS_CHARGING_AC, WAS_BELOW_LOW_THRESHOLD, WAS_FULL, LAST_AC_TIMESTAMP
     while True:
         time.sleep(AC_CHECK_MINUTES * 60)
         if not ECOFLOW_READY:
@@ -658,6 +706,7 @@ def ac_check_timer() -> None:
             if is_charging and not WAS_CHARGING_AC:
                 send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
                 log.info("Notificado inicio de carga AC (%s W)", ac_w)
+                LAST_AC_TIMESTAMP = time.time()
 
             soc = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc")
             state_changed = is_charging != WAS_CHARGING_AC
