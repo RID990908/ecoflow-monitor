@@ -1,1 +1,1 @@
-worker: python orchestrator.py
+worker: python ecoflow_telegram_monitor.py

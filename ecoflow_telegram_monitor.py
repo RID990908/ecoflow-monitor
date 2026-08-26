@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Worker EcoFlow → Telegram. Ejecuta UNA acción puntual y termina — pensado para
-correr en GitHub Actions, disparado on-demand por orchestrator.py (que corre
-en Railway y decide CUÁNDO disparar cada acción: horario del informe, cada
-cuánto chequear la carga AC, o en respuesta a un comando del usuario). Este
-script no escucha Telegram ni mantiene ningún proceso corriendo — por eso
-puede vivir en GitHub Actions, la única IP que EcoFlow no bloquea.
+Monitor EcoFlow (Delta 2 + batería extra) → informe por Telegram.
+
+Un solo proceso, corre 24/7 en Railway: escucha comandos de Telegram al
+instante (long polling) y en paralelo chequea cada cierto tiempo si toca
+mandar el informe periódico o si empezó a cargar por corriente. Todo el
+estado (pausa, última carga AC) vive en memoria mientras el proceso corre.
 
 Variables de entorno requeridas:
   ECOFLOW_ACCESS_KEY   Access key de developer.ecoflow.com
@@ -14,35 +14,28 @@ Variables de entorno requeridas:
   ECOFLOW_SN_EXTRA     Número de serie de la batería extra (opcional)
   TELEGRAM_BOT_TOKEN   Token del bot (de @BotFather)
   TELEGRAM_CHAT_ID     Chat ID destino (de @userinfobot)
-  ACTION               report | estado | ac_check
-  STATE_FILE           Archivo de estado persistido, solo para was_charging_ac (default: state.json)
+  INTERVAL_HOURS       Intervalo del informe periódico en horas (default: 1)
+  AC_CHECK_MINUTES     Cada cuánto chequear si empezó a cargar por AC (default: 1)
 
 Uso:
-  ACTION=report python3 ecoflow_telegram_monitor.py
-  python3 ecoflow_telegram_monitor.py estado
+  python3 ecoflow_telegram_monitor.py
 """
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import random
 import sys
+import threading
 import time
 from datetime import datetime
 
 import requests
 
-# El "accessKey is invalid" que aparecía al principio no era un problema de
-# región: era que la key recién generada tarda unos minutos en activarse en
-# EcoFlow. api.ecoflow.com funciona bien. Queda configurable por las dudas.
 API_HOST = os.environ.get("ECOFLOW_API_HOST", "https://api.ecoflow.com")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("ecoflow-monitor")
 
 
@@ -55,36 +48,25 @@ def require_env(name: str) -> str:
 
 
 # Las credenciales de EcoFlow son opcionales al arrancar: el bot debe poder
-# responder /start y /help aunque todavía no estén (p. ej. mientras se espera
-# la aprobación del programa developer). Se validan recién al armar el reporte.
+# responder /start y /help aunque todavía no estén listas (p. ej. mientras
+# se espera la aprobación del programa developer o el permiso del dispositivo).
 ACCESS_KEY = os.environ.get("ECOFLOW_ACCESS_KEY", "").strip()
 SECRET_KEY = os.environ.get("ECOFLOW_SECRET_KEY", "").strip()
 SN_DELTA2 = os.environ.get("ECOFLOW_SN_DELTA2", "").strip()
 SN_EXTRA = os.environ.get("ECOFLOW_SN_EXTRA", "").strip()
 BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
-INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "2"))
+INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "1"))
+AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "1"))
 ECOFLOW_READY = bool(ACCESS_KEY and SECRET_KEY and SN_DELTA2)
 AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
-STATE_FILE = os.environ.get("STATE_FILE", "state.json")
+
 if not ECOFLOW_READY:
     log.warning("EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2)")
 
-DEFAULT_STATE = {"was_charging_ac": False}
-
-
-def load_state() -> dict:
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        return {**DEFAULT_STATE, **state}
-    except (FileNotFoundError, json.JSONDecodeError):
-        return dict(DEFAULT_STATE)
-
-
-def save_state(state: dict) -> None:
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f)
+START_TIME = time.time()
+AUTO_PAUSED = False
+WAS_CHARGING_AC = False
 
 
 def _flatten(obj, prefix=""):
@@ -109,9 +91,7 @@ def _signed_headers(params: dict) -> dict:
     parts = [f"{k}={v}" for k, v in sorted(flat.items())]
     parts += [f"accessKey={ACCESS_KEY}", f"nonce={nonce}", f"timestamp={timestamp}"]
     sign_str = "&".join(parts)
-    signature = hmac.new(
-        SECRET_KEY.encode("utf-8"), sign_str.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    signature = hmac.new(SECRET_KEY.encode("utf-8"), sign_str.encode("utf-8"), hashlib.sha256).hexdigest()
     return {
         "accessKey": ACCESS_KEY,
         "nonce": nonce,
@@ -124,12 +104,7 @@ def _signed_headers(params: dict) -> dict:
 def get_device_quota(sn: str) -> dict:
     params = {"sn": sn}
     headers = _signed_headers(params)
-    resp = requests.get(
-        f"{API_HOST}/iot-open/sign/device/quota/all",
-        params=params,
-        headers=headers,
-        timeout=30,
-    )
+    resp = requests.get(f"{API_HOST}/iot-open/sign/device/quota/all", params=params, headers=headers, timeout=30)
     resp.raise_for_status()
     payload = resp.json()
     if str(payload.get("code")) != "0":
@@ -139,9 +114,7 @@ def get_device_quota(sn: str) -> dict:
 
 def get_device_online(sn: str) -> bool:
     headers = _signed_headers({})
-    resp = requests.get(
-        f"{API_HOST}/iot-open/sign/device/list", headers=headers, timeout=30
-    )
+    resp = requests.get(f"{API_HOST}/iot-open/sign/device/list", headers=headers, timeout=30)
     resp.raise_for_status()
     payload = resp.json()
     if str(payload.get("code")) != "0":
@@ -217,6 +190,22 @@ def send_telegram(text: str, chat_id: str = None) -> None:
         raise RuntimeError(f"Telegram API error: {payload}")
 
 
+def set_bot_commands() -> None:
+    commands = [
+        {"command": "start", "description": "Qué hace este bot"},
+        {"command": "reporte", "description": "Informe detallado por dispositivo"},
+        {"command": "estado", "description": "Línea rápida combinada"},
+        {"command": "pausa", "description": "Pausar los informes automáticos"},
+        {"command": "reanudar", "description": "Reanudar los informes automáticos"},
+        {"command": "ping", "description": "Ver si el bot está activo"},
+        {"command": "help", "description": "Ver comandos disponibles"},
+    ]
+    resp = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands", json={"commands": commands}, timeout=30
+    )
+    resp.raise_for_status()
+
+
 # Delta 2 y batería extra son de la misma capacidad (1024Wh cada una), así que
 # el promedio simple de sus %SOC es válido: ambas pesan lo mismo en el total.
 BATTERY_CAPACITY_WH = 1024
@@ -271,7 +260,7 @@ def build_report() -> str:
 
 
 def build_quick_status() -> str:
-    """Línea compacta y combinada: carga de ambas baterías + entrada solar. Para /estado."""
+    """Línea compacta y combinada: carga de ambas baterías + entrada solar/AC. Para /estado."""
     if not ECOFLOW_READY:
         return "⏳ EcoFlow todavía no está configurado."
 
@@ -297,52 +286,140 @@ def build_quick_status() -> str:
         except Exception as exc:
             parts.append(f"Extra ⚠️ {exc}")
 
-    combined = _combined_line(soc_delta2, soc_extra)
-    if combined:
+    if soc_delta2 is not None and soc_extra is not None:
         parts.append(f"Total {round((soc_delta2 + soc_extra) / 2, 1)}%")
 
     return "🔋 " + " · ".join(parts)
 
 
-def check_ac_charging(state: dict) -> None:
-    """Avisa apenas la Delta 2 empieza a cargar por corriente (AC), sin esperar al reporte periódico."""
-    if not ECOFLOW_READY:
-        return
+HELP_TEXT = (
+    "🤖 *Monitor EcoFlow*\n\n"
+    "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
+    "/estado — línea rápida combinada (carga de ambas + solar + AC)\n"
+    "/pausa — pausar los informes automáticos\n"
+    "/reanudar — reanudar los informes automáticos\n"
+    "/ping — ver si el bot está activo\n"
+    "/start — qué hace este bot\n"
+    "/help — ver esta ayuda\n\n"
+    f"Informe automático cada {INTERVAL_HOURS:g}h · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min "
+    "(si no está pausado)."
+)
+START_TEXT = (
+    "👋 Hola, soy el monitor de tu EcoFlow.\n"
+    f"Te mando un informe automático cada {INTERVAL_HOURS:g}h y te aviso apenas empiece a cargar "
+    "por corriente.\n\n" + HELP_TEXT
+)
+
+
+def _format_uptime() -> str:
+    seconds = int(time.time() - START_TIME)
+    hours, rem = divmod(seconds, 3600)
+    minutes = rem // 60
+    return f"{hours}h {minutes}m"
+
+
+def handle_command(text: str, chat_id: str) -> None:
+    global AUTO_PAUSED
+    cmd = text.strip().split()[0].split("@")[0].lower()
+    if cmd == "/reporte":
+        send_telegram(build_report(), chat_id=chat_id)
+    elif cmd == "/estado":
+        send_telegram(build_quick_status(), chat_id=chat_id)
+    elif cmd == "/pausa":
+        AUTO_PAUSED = True
+        send_telegram("⏸ Informes automáticos pausados. Usá /reanudar para reactivarlos.", chat_id=chat_id)
+    elif cmd == "/reanudar":
+        AUTO_PAUSED = False
+        send_telegram("▶️ Informes automáticos reanudados.", chat_id=chat_id)
+    elif cmd == "/ping":
+        estado_ecoflow = "🟢 EcoFlow configurado" if ECOFLOW_READY else "⏳ EcoFlow sin configurar"
+        estado_auto = "⏸ pausado" if AUTO_PAUSED else "▶️ activo"
+        send_telegram(
+            f"🏓 Pong. Activo hace {_format_uptime()}.\n{estado_ecoflow} · Automático {estado_auto}",
+            chat_id=chat_id,
+        )
+    elif cmd == "/start":
+        send_telegram(START_TEXT, chat_id=chat_id)
+    elif cmd == "/help":
+        send_telegram(HELP_TEXT, chat_id=chat_id)
+
+
+def poll_commands() -> None:
+    """Escucha comandos entrantes (long polling) y responde. Ignora chats que no sean el configurado."""
+    offset = 0
+    while True:
+        try:
+            resp = requests.get(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
+                params={"offset": offset, "timeout": 30},
+                timeout=40,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            for update in payload.get("result", []):
+                offset = update["update_id"] + 1
+                message = update.get("message", {})
+                text = message.get("text", "")
+                chat_id = str(message.get("chat", {}).get("id", ""))
+                if not text.startswith("/"):
+                    continue
+                if chat_id != CHAT_ID:
+                    log.info("Comando ignorado de chat no autorizado: %s", chat_id)
+                    continue
+                try:
+                    handle_command(text, chat_id)
+                except Exception:
+                    log.exception("Error respondiendo comando %s", text)
+        except Exception:
+            log.exception("Error en el polling de comandos; reintento")
+            time.sleep(5)
+
+
+def report_timer() -> None:
+    while True:
+        time.sleep(INTERVAL_HOURS * 3600)
+        if AUTO_PAUSED or not ECOFLOW_READY:
+            log.info("Informe automático omitido (pausado o EcoFlow no configurado)")
+            continue
+        try:
+            send_telegram(build_report())
+            log.info("Informe periódico enviado")
+        except Exception:
+            log.exception("Fallo enviando el informe periódico")
+
+
+def ac_check_timer() -> None:
+    global WAS_CHARGING_AC
+    while True:
+        time.sleep(AC_CHECK_MINUTES * 60)
+        if AUTO_PAUSED or not ECOFLOW_READY:
+            continue
+        try:
+            data = get_device_quota(SN_DELTA2)
+            ac_w = get_ac_watts(data)
+            is_charging = bool(ac_w and ac_w > AC_WATTS_THRESHOLD)
+            if is_charging and not WAS_CHARGING_AC:
+                send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
+                log.info("Notificado inicio de carga AC (%s W)", ac_w)
+            WAS_CHARGING_AC = is_charging
+        except Exception:
+            log.exception("Error chequeando carga por AC")
+
+
+def main() -> None:
     try:
-        data = get_device_quota(SN_DELTA2)
-        ac_w = get_ac_watts(data)
-        is_charging = bool(ac_w and ac_w > AC_WATTS_THRESHOLD)
-        if is_charging and not state.get("was_charging_ac", False):
-            send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
-            log.info("Notificado inicio de carga AC (%s W)", ac_w)
-        state["was_charging_ac"] = is_charging
+        set_bot_commands()
     except Exception:
-        log.exception("Error chequeando carga por AC")
+        log.exception("No se pudo registrar el menú de comandos (no bloqueante)")
 
+    threading.Thread(target=poll_commands, daemon=True).start()
+    threading.Thread(target=report_timer, daemon=True).start()
+    threading.Thread(target=ac_check_timer, daemon=True).start()
 
-def run_action(action: str) -> None:
-    """Ejecuta UNA acción puntual (disparada por el orquestador en Railway vía workflow_dispatch)
-    y termina. Este script ya no escucha comandos de Telegram — eso lo hace orchestrator.py
-    en Railway, que es quien decide cuándo disparar cada acción."""
-    if action == "report":
-        send_telegram(build_report())
-        log.info("Informe enviado")
-    elif action == "estado":
-        send_telegram(build_quick_status())
-        log.info("Estado rápido enviado")
-    elif action == "ac_check":
-        state = load_state()
-        check_ac_charging(state)
-        save_state(state)
-        log.info("Chequeo de carga AC completo")
-    else:
-        log.error("Acción desconocida: %s (esperaba report/estado/ac_check)", action)
-        sys.exit(1)
+    log.info("Monitor iniciado. Informe cada %.1fh, chequeo AC cada %.1f min.", INTERVAL_HOURS, AC_CHECK_MINUTES)
+    while True:
+        time.sleep(3600)
 
 
 if __name__ == "__main__":
-    action_arg = os.environ.get("ACTION") or (sys.argv[1] if len(sys.argv) > 1 else "")
-    if not action_arg:
-        log.error("Falta indicar la acción (variable de entorno ACTION o primer argumento)")
-        sys.exit(1)
-    run_action(action_arg)
+    main()
