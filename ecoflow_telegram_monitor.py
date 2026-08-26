@@ -518,7 +518,7 @@ def _format_elapsed(seconds: float) -> str:
 
 def _last_ac_line() -> str:
     if not LAST_AC_TIMESTAMP:
-        return "⚡ Última vez que llegó corriente: sin registro todavía"
+        return "⚡ Última vez que llegó corriente: sin registro"
     return f"⚡ Última vez que llegó corriente: hace {_format_elapsed(time.time() - LAST_AC_TIMESTAMP)}"
 
 
@@ -578,7 +578,7 @@ def build_report() -> str:
         charging_up = int(remain_min) > 0 and total_in_w > out_w
         verb = "para llenarse" if charging_up else "de autonomía"
         eta = datetime.now(TZ) + timedelta(minutes=abs(int(remain_min)))
-        eta_verb = "vas a estar full a las" if charging_up else "a este consumo, te alcanza hasta las"
+        eta_verb = "vas a estar full a las" if charging_up else "dura hasta las"
         lines.append(f"⏱ ~{hours}h {minutes}m {verb} ({eta_verb} {eta.strftime('%H:%M')})")
 
     ports = [
