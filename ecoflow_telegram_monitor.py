@@ -207,7 +207,7 @@ def _mqtt_topics(sn: str) -> dict:
 
 def _private_login() -> tuple:
     resp = requests.post(
-        f"https://{API_HOST}/auth/login",
+        f"{API_HOST}/auth/login",
         headers={"lang": "en_US", "content-type": "application/json"},
         json={
             "email": ECOFLOW_EMAIL,
@@ -226,7 +226,7 @@ def _private_login() -> tuple:
 
 def _private_mqtt_creds(token: str) -> tuple:
     resp = requests.get(
-        f"https://{API_HOST}/iot-auth/app/certification",
+        f"{API_HOST}/iot-auth/app/certification",
         headers={"lang": "en_US", "authorization": f"Bearer {token}", "content-type": "application/json"},
         timeout=15,
     )
