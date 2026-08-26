@@ -456,15 +456,14 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
-def _battery_flow_suffix(net_w) -> str:
-    """🔌 si está cargando, 🪫 si se está descargando, nada si no hay flujo neto."""
-    if net_w is None:
-        return ""
+def _battery_flow_emoji(net_w) -> tuple:
+    """(emoji_batería, sufijo_texto) según el neto: 🟢 + 🔌 si carga,
+    🔴 si descarga (sin conector, el color ya lo dice), 🔋 si no hay flujo."""
+    if net_w is None or -NOISE_FLOOR_W <= net_w <= NOISE_FLOOR_W:
+        return "🔋", ""
     if net_w > NOISE_FLOOR_W:
-        return f" 🔌 ({round(net_w)} W)"
-    if net_w < -NOISE_FLOOR_W:
-        return f" 🪫 ({abs(round(net_w))} W)"
-    return ""
+        return "🟢", f" 🔌 ({round(net_w)} W)"
+    return "🔴", f" ({abs(round(net_w))} W)"
 
 
 # Delta 2 y batería extra son de la misma capacidad, así que el promedio
@@ -485,6 +484,7 @@ def build_report() -> str:
         )
 
     try:
+        online = get_device_online(SN_DELTA2)
         data = get_device_quota(SN_DELTA2)
     except Exception as exc:
         log.exception("Error consultando la Delta 2")
@@ -506,19 +506,16 @@ def build_report() -> str:
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
 
-    # Encabezado: 🟢 cargando / 🔴 descargando (en vez de online/offline — si
-    # llegamos hasta acá sin excepción, el dispositivo ya está respondiendo).
-    # El 🔌 solo aparece cuando efectivamente está cargando.
-    is_charging_now = delta2_net_w > NOISE_FLOOR_W
-    status = "🟢" if is_charging_now else "🔴"
-    plug_emoji = " 🔌" if is_charging_now else ""
+    status = "🟢 en línea" if online else "🔴 desconectada"
 
-    lines = [f"📊 *Informe EcoFlow* · {status}{plug_emoji}", ""]
+    lines = [f"📊 *Informe EcoFlow* · {status}", ""]
 
+    delta2_emoji, delta2_suffix = _battery_flow_emoji(delta2_net_w)
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
-    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2_str}%*{_battery_flow_suffix(delta2_net_w)}")
+    lines.append(f"{delta2_emoji} Delta 2 — Carga: *{soc_delta2_str}%*{delta2_suffix}")
     if soc_extra is not None:
-        lines.append(f"🔋 Batería Extra — Carga: *{soc_extra:.1f}%*{_battery_flow_suffix(extra_net_w)}")
+        extra_emoji, extra_suffix = _battery_flow_emoji(extra_net_w)
+        lines.append(f"{extra_emoji} Batería Extra — Carga: *{soc_extra:.1f}%*{extra_suffix}")
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
