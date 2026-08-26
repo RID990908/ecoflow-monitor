@@ -424,11 +424,9 @@ def _combined_line(soc_delta2, soc_extra) -> str:
 
 
 def build_report() -> str:
-    now = datetime.now().strftime("%d/%m/%Y %H:%M")
-
     if not ECOFLOW_READY:
         return (
-            f"📊 *Informe EcoFlow* — {now}\n\n"
+            "📊 *Informe EcoFlow*\n\n"
             "⏳ EcoFlow todavía no está configurado (esperando ACCESS_KEY/SECRET_KEY "
             "de developer.ecoflow.com). Avisá cuando estén listas."
         )
@@ -438,7 +436,7 @@ def build_report() -> str:
         data = get_device_quota(SN_DELTA2)
     except Exception as exc:
         log.exception("Error consultando la Delta 2")
-        return f"📊 *Informe EcoFlow* — {now}\n\n⚠️ Error al consultar la Delta 2: {exc}"
+        return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
 
     soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
@@ -446,6 +444,9 @@ def build_report() -> str:
     ac_w = _estimate_ac_watts(data, pv_w)
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
+    battery_discharge_w = _pick(data, "bms_bmsStatus.outputWatts")
+    delta2_in_w = _pick(data, "bms_bmsStatus.inputWatts")
+    extra_in_w = _pick(data, "bms_slave.inputWatts")
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
     temp = _pick(data, "bms_bmsStatus.temp", "inv.outTemp")
 
@@ -458,16 +459,22 @@ def build_report() -> str:
         source_emoji = ""
     status = "🟢 en línea" if online else "🔴 desconectada"
 
-    lines = [f"📊 *Informe EcoFlow* — {now} · {status}{source_emoji}", ""]
+    lines = [f"📊 *Informe EcoFlow* · {status}{source_emoji}", ""]
 
-    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%*")
+    delta2_line = f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%*"
+    if delta2_in_w:
+        delta2_line += f" (entrando: {delta2_in_w} W)"
+    lines.append(delta2_line)
     if soc_extra is not None:
-        lines.append(f"🔋 Batería Extra — Carga: *{soc_extra}%*")
+        extra_line = f"🔋 Batería Extra — Carga: *{soc_extra}%*"
+        if extra_in_w:
+            extra_line += f" (entrando: {extra_in_w} W)"
+        lines.append(extra_line)
     lines.append("")
 
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 'N/D'} W")
-    lines.append(f"⚡ Entrada total: {total_in_w} W")
+    lines.append(f"⚡ Entrada desde batería: {battery_discharge_w if battery_discharge_w is not None else 'N/D'} W")
     lines.append(f"📤 Salida: {out_w} W")
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
