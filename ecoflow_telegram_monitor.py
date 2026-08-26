@@ -435,9 +435,6 @@ def build_report() -> str:
     ac_w = get_ac_watts(data)  # dato real de inv.inputWatts, sin estimar (ver nota abajo)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
-    battery_discharge_w = _pick(data, "bms_bmsStatus.outputWatts")
-    delta2_in_w = _pick(data, "bms_bmsStatus.inputWatts")
-    extra_in_w = _pick(data, "bms_slave.inputWatts")
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
     # En el encabezado, qué fuente está cargando ahora mismo (si alguna)
@@ -451,15 +448,9 @@ def build_report() -> str:
 
     lines = [f"📊 *Informe EcoFlow* · {status}{source_emoji}", ""]
 
-    lines.append(
-        f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%* "
-        f"({delta2_in_w if delta2_in_w is not None else 'N/D'} W entrando)"
-    )
+    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%*")
     if soc_extra is not None:
-        lines.append(
-            f"🔋 Batería Extra — Carga: *{soc_extra}%* "
-            f"({extra_in_w if extra_in_w is not None else 'N/D'} W entrando)"
-        )
+        lines.append(f"🔋 Batería Extra — Carga: *{soc_extra}%*")
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
@@ -467,7 +458,6 @@ def build_report() -> str:
 
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 0} W")
-    lines.append(f"⚡ Entrada desde batería: {battery_discharge_w if battery_discharge_w is not None else 0} W")
     lines.append(f"📤 Salida: {out_w} W")
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
