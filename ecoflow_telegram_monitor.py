@@ -707,6 +707,9 @@ def ac_check_timer() -> None:
                 send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
                 log.info("Notificado inicio de carga AC (%s W)", ac_w)
                 LAST_AC_TIMESTAMP = time.time()
+            elif not is_charging and WAS_CHARGING_AC:
+                send_telegram("🔌⚠️ Se fue la luz: la Delta 2 dejó de cargar por AC.")
+                log.info("Notificado corte de luz (dejó de cargar por AC)")
 
             soc = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc")
             state_changed = is_charging != WAS_CHARGING_AC
