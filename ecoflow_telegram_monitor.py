@@ -364,18 +364,6 @@ def get_ac_watts(data: dict):
     return _pick(data, "inv.inputWatts")
 
 
-def _estimate_ac_watts(data: dict, pv_w):
-    """inv.inputWatts a veces no llega todavía por MQTT; si tenemos el total y
-    la solar, la AC es la diferencia (nunca negativa)."""
-    ac_w = get_ac_watts(data)
-    if ac_w is not None:
-        return ac_w
-    total_in_w = _pick(data, "pd.wattsInSum")
-    if total_in_w is not None and pv_w is not None:
-        return max(0, round(total_in_w - pv_w))
-    return None
-
-
 def get_extra_battery_soc(data: dict):
     """La batería extra no es un dispositivo aparte: sus datos (bms_slave.*)
     vienen incluidos en la misma respuesta de la Delta 2."""
@@ -420,7 +408,7 @@ def _combined_line(soc_delta2, soc_extra) -> str:
         return ""
     avg = round((soc_delta2 + soc_extra) / 2, 1)
     total_wh = round(avg / 100 * BATTERY_CAPACITY_WH * 2)
-    return f"🔷 *Total combinado*: *{avg}%* (~{total_wh} Wh de {BATTERY_CAPACITY_WH * 2} Wh)"
+    return f"🔋 *Total combinado*: *{avg}%* (~{total_wh} Wh de {BATTERY_CAPACITY_WH * 2} Wh)"
 
 
 def build_report() -> str:
@@ -441,9 +429,9 @@ def build_report() -> str:
     soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
     pv_w = get_pv_watts(data)
-    ac_w = _estimate_ac_watts(data, pv_w)
-    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
+    ac_w = get_ac_watts(data)  # dato real de inv.inputWatts, sin estimar (ver nota abajo)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
+    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
     battery_discharge_w = _pick(data, "bms_bmsStatus.outputWatts")
     delta2_in_w = _pick(data, "bms_bmsStatus.inputWatts")
     extra_in_w = _pick(data, "bms_slave.inputWatts")
@@ -461,19 +449,22 @@ def build_report() -> str:
 
     lines = [f"📊 *Informe EcoFlow* · {status}{source_emoji}", ""]
 
-    delta2_line = f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%*"
-    if delta2_in_w:
-        delta2_line += f" (entrando: {delta2_in_w} W)"
-    lines.append(delta2_line)
+    lines.append(
+        f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%* "
+        f"({delta2_in_w if delta2_in_w is not None else 'N/D'} W entrando)"
+    )
     if soc_extra is not None:
-        extra_line = f"🔋 Batería Extra — Carga: *{soc_extra}%*"
-        if extra_in_w:
-            extra_line += f" (entrando: {extra_in_w} W)"
-        lines.append(extra_line)
+        lines.append(
+            f"🔋 Batería Extra — Carga: *{soc_extra}%* "
+            f"({extra_in_w if extra_in_w is not None else 'N/D'} W entrando)"
+        )
+    combined = _combined_line(soc_delta2, soc_extra)
+    if combined:
+        lines.append(combined)
     lines.append("")
 
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
-    lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 'N/D'} W")
+    lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 0} W")
     lines.append(f"⚡ Entrada desde batería: {battery_discharge_w if battery_discharge_w is not None else 'N/D'} W")
     lines.append(f"📤 Salida: {out_w} W")
     if remain_min:
@@ -483,11 +474,8 @@ def build_report() -> str:
     if temp is not None:
         lines.append(f"🌡 Temperatura: {temp}°C")
 
-    vol_mv = _pick(data, "bms_bmsStatus.vol")
     cycles = _pick(data, "bms_bmsStatus.cycles")
     soh = _pick(data, "bms_bmsStatus.soh")
-    if vol_mv is not None:
-        lines.append(f"🔋 Voltaje: {round(vol_mv / 1000, 1)} V")
     if cycles is not None:
         lines.append(f"🔁 Ciclos de carga: {cycles}")
     if soh is not None:
@@ -507,11 +495,6 @@ def build_report() -> str:
         for name, w in active_ports:
             lines.append(f"  {name}: {w} W")
 
-    combined = _combined_line(soc_delta2, soc_extra)
-    if combined:
-        lines.append("")
-        lines.append(combined)
-
     return "\n".join(lines)
 
 
@@ -527,10 +510,10 @@ def build_quick_status() -> str:
         data = get_device_quota(SN_DELTA2)
         soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
         pv_w = get_pv_watts(data)
-        ac_w = _estimate_ac_watts(data, pv_w)
+        ac_w = get_ac_watts(data)
         lines.append(f"🔋 Delta 2: {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
         lines.append(f"☀️ Solar (panel): {pv_w if pv_w is not None else 'N/D'} W")
-        lines.append(f"🔌 Corriente (AC): {ac_w if ac_w is not None else 'N/D'} W")
+        lines.append(f"🔌 Corriente (AC): {ac_w if ac_w is not None else 0} W")
 
         soc_extra = get_extra_battery_soc(data)
         if soc_extra is not None:
