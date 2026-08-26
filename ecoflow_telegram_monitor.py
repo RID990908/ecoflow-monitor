@@ -238,20 +238,31 @@ def _mqtt_topics(sn: str) -> dict:
         "get_reply": f"/app/{_mqtt_user_id}/{sn}/thing/property/get_reply",
         "data": f"/app/device/property/{sn}",
         "set": f"/app/{_mqtt_user_id}/{sn}/thing/property/set",
+        "set_reply": f"/app/{_mqtt_user_id}/{sn}/thing/property/set_reply",
     }
 
 
 def publish_set_command(sn: str, module_type: int, operate_type: str, params: dict) -> bool:
-    """Manda un comando de control (encender/apagar salidas) al dispositivo por MQTT."""
+    """Manda un comando de control (encender/apagar salidas) al dispositivo por MQTT.
+    El payload necesita los campos "from"/"id"/"version" que pone la app real
+    (sin ellos, el dispositivo ignora el mensaje en silencio - confirmado)."""
     if _mqtt_client is None:
         log.error("No se puede mandar comando: cliente MQTT no conectado")
         return False
     topic = _mqtt_topics(sn)["set"]
+    msg_id = str(999900000 + random.randint(10000, 99999))
     payload = json.dumps(
-        {"version": "1.1", "moduleType": module_type, "operateType": operate_type, "params": params}
+        {
+            "from": "Telegram-Bot",
+            "id": msg_id,
+            "version": "1.0",
+            "moduleType": module_type,
+            "operateType": operate_type,
+            "params": params,
+        }
     )
     _mqtt_client.publish(topic, payload)
-    log.info("Comando enviado: %s %s", operate_type, params)
+    log.info("Comando enviado (id=%s): %s %s", msg_id, operate_type, params)
     return True
 
 
@@ -314,6 +325,8 @@ def _on_mqtt_message(client, userdata, msg):
                 if d.get("online") and "quotaMap" in d:
                     entry.setdefault("quota", {}).update(d["quotaMap"])
                 entry["updated_at"] = time.time()
+            elif msg.topic == topics["set_reply"]:
+                log.info("Respuesta a comando de control: %s", raw)
 
 
 def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
@@ -325,6 +338,7 @@ def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
             topics = _mqtt_topics(sn)
             client.subscribe(topics["data"])
             client.subscribe(topics["get_reply"])
+            client.subscribe(topics["set_reply"])
             _request_quota_refresh(sn)
     else:
         log.error("Fallo de conexión MQTT privado, rc=%s", rc)
