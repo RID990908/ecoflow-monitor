@@ -66,9 +66,22 @@ AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por
 if ECOFLOW_READY:
     try:
         my_ip = requests.get("https://api.ipify.org", timeout=10).text
-        log.info("DIAG: API_HOST=%s · IP saliente=%s", API_HOST, my_ip)
+        log.info(
+            "DIAG: API_HOST=%s · IP saliente=%s · hora UTC contenedor=%s",
+            API_HOST, my_ip, datetime.utcnow().isoformat(),
+        )
+        _diag_resp = requests.get(
+            f"{API_HOST}/iot-open/sign/device/list",
+            headers={"accessKey": ACCESS_KEY, "nonce": "1", "timestamp": "1",
+                     "sign": "diagnostic-invalid-sign-on-purpose"},
+            timeout=15,
+        )
+        log.info(
+            "DIAG: status=%s headers=%s body=%s",
+            _diag_resp.status_code, dict(_diag_resp.headers), _diag_resp.text[:300],
+        )
     except Exception:
-        log.exception("DIAG: no se pudo obtener la IP saliente")
+        log.exception("DIAG: fallo el diagnóstico extendido")
 if not ECOFLOW_READY:
     log.warning(
         "EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2); "
