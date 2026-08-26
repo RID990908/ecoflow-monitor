@@ -459,6 +459,16 @@ def build_report() -> str:
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 0} W")
     lines.append(f"📤 Salida: {out_w} W")
+
+    # Los campos directos de carga/descarga de batería (bms_bmsStatus.*)
+    # están rotos (confirmado: se quedan pegados en 0 aunque el dispositivo
+    # esté claramente descargando). En su lugar, lo derivamos de entrada y
+    # salida totales, que sí son confiables: si sale más de lo que entra,
+    # la diferencia tiene que estar saliendo de la batería.
+    battery_net_w = total_in_w - out_w
+    if battery_net_w < -AC_WATTS_THRESHOLD:
+        lines.append(f"🔋 Descargando: {abs(round(battery_net_w))} W")
+
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
         verb = "para llenarse" if int(remain_min) > 0 and total_in_w > out_w else "de autonomía"
