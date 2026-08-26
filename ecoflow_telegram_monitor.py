@@ -347,8 +347,9 @@ def _pick(data: dict, *keys, default=None):
 
 
 def get_pv_watts(data: dict):
-    pv_w = _pick(data, "mppt.inWatts")
-    return round(pv_w / 10, 1) if pv_w is not None else None  # viene en décimas de watt
+    # Confirmado con datos reales: mppt.inWatts ya viene directo en watts
+    # (mppt.inWatts=501 ~= pd.wattsInSum=500 sin carga AC activa).
+    return _pick(data, "mppt.inWatts")
 
 
 def get_ac_watts(data: dict):
