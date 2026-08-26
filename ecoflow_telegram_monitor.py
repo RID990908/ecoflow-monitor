@@ -483,7 +483,7 @@ def _charge_source(pv_w, ac_w, delta2_net_w) -> tuple:
     if has_solar and battery_helping:
         return "☀️/🔋", "Solar y batería"
     if has_solar:
-        return "☀️", "Solar"
+        return "☀️", ""
     return "🔋", "Batería"
 
 
@@ -554,8 +554,9 @@ def build_report() -> str:
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
 
     source_emoji, source_label = _charge_source(pv_w, ac_w, delta2_net_w)
+    source_part = f"{source_emoji} {source_label}" if source_label else source_emoji
 
-    lines = [f"📊 *Informe EcoFlow* · {source_emoji} {source_label}", ""]
+    lines = [f"📊 *Informe EcoFlow* · {source_part}", ""]
 
     delta2_emoji, delta2_label, delta2_suffix = _battery_flow_emoji(delta2_net_w)
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
