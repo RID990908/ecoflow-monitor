@@ -84,8 +84,6 @@ if not ECOFLOW_READY:
 elif USE_PRIVATE_API:
     log.info("Usando el modo 'private API' (MQTT con email/password) en vez de las developer keys")
 
-START_TIME = time.time()
-
 # Se persiste en un volumen de Railway (/data por default) para sobrevivir
 # redeploys — sin esto, "ya avisé que llegó la corriente" y los umbrales de
 # alerta se resetean cada vez que se sube código nuevo.
@@ -450,7 +448,6 @@ def set_bot_commands() -> None:
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
-        {"command": "ping", "description": "Ver si el bot está activo"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
     resp = requests.post(
@@ -555,7 +552,6 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
-    "/ping — ver si el bot está activo\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
     f"Informe automático cada {INTERVAL_HOURS:g}h · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
@@ -566,13 +562,6 @@ START_TEXT = (
     f"Te mando un informe automático cada {INTERVAL_HOURS:g}h y te aviso apenas empiece a cargar "
     "por corriente.\n\n" + HELP_TEXT
 )
-
-
-def _format_uptime() -> str:
-    seconds = int(time.time() - START_TIME)
-    hours, rem = divmod(seconds, 3600)
-    minutes = rem // 60
-    return f"{hours}h {minutes}m"
 
 
 def handle_command(text: str, chat_id: str) -> None:
@@ -588,12 +577,6 @@ def handle_command(text: str, chat_id: str) -> None:
             BATTERY_LOW_THRESHOLD = int(parts[1])
             _save_persisted_state()
             send_telegram(f"🔔 Te voy a avisar cuando la carga baje de {BATTERY_LOW_THRESHOLD}%.", chat_id=chat_id)
-    elif cmd == "/ping":
-        estado_ecoflow = "🟢 EcoFlow configurado" if ECOFLOW_READY else "⏳ EcoFlow sin configurar"
-        send_telegram(
-            f"🏓 Pong. Activo hace {_format_uptime()}.\n{estado_ecoflow}",
-            chat_id=chat_id,
-        )
     elif cmd == "/start":
         send_telegram(START_TEXT, chat_id=chat_id)
     elif cmd == "/help":
