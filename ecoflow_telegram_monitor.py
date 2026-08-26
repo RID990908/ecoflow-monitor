@@ -21,17 +21,25 @@ Uso:
   python3 ecoflow_telegram_monitor.py
 """
 
+import base64
 import hashlib
 import hmac
+import json
 import logging
 import os
 import random
 import sys
 import threading
 import time
+import uuid as uuid_lib
 from datetime import datetime
 
 import requests
+
+try:
+    import paho.mqtt.client as mqtt
+except ImportError:
+    mqtt = None
 
 API_HOST = os.environ.get("ECOFLOW_API_HOST", "https://api.ecoflow.com")
 
@@ -58,15 +66,33 @@ BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
 INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "1"))
 AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "1"))
-ECOFLOW_READY = bool(ACCESS_KEY and SECRET_KEY and SN_DELTA2)
 AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
 
+# Modo "private API": en vez de las developer keys (bloqueadas por IP en
+# Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
+# contraseña normales de la cuenta EcoFlow y habla por MQTT — el mismo canal
+# que usa la app móvil. No oficial/ingeniería inversa, pero no pasa por el
+# developer portal para nada, así que evita los dos bloqueos que tuvimos ahí.
+ECOFLOW_EMAIL = os.environ.get("ECOFLOW_EMAIL", "").strip()
+ECOFLOW_PASSWORD = os.environ.get("ECOFLOW_PASSWORD", "").strip()
+USE_PRIVATE_API = bool(ECOFLOW_EMAIL and ECOFLOW_PASSWORD)
+
+ECOFLOW_READY = bool(SN_DELTA2 and (USE_PRIVATE_API or (ACCESS_KEY and SECRET_KEY)))
+
 if not ECOFLOW_READY:
-    log.warning("EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2)")
+    log.warning("EcoFlow no configurado todavía (faltan credenciales o el serial de la Delta 2)")
+elif USE_PRIVATE_API:
+    log.info("Usando el modo 'private API' (MQTT con email/password) en vez de las developer keys")
 
 START_TIME = time.time()
 AUTO_PAUSED = False
 WAS_CHARGING_AC = False
+
+# --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
+_mqtt_client = None
+_mqtt_user_id = None
+_device_cache = {}  # sn -> {"quota": {...}, "online": bool, "updated_at": ts}
+_mqtt_cache_lock = threading.Lock()
 
 
 def _flatten(obj, prefix=""):
@@ -101,24 +127,211 @@ def _signed_headers(params: dict) -> dict:
     }
 
 
-def get_device_quota(sn: str) -> dict:
-    params = {"sn": sn}
-    headers = _signed_headers(params)
-    resp = requests.get(f"{API_HOST}/iot-open/sign/device/quota/all", params=params, headers=headers, timeout=30)
+# EcoFlow bloquea las IPs de datacenter de Railway (confirmado: code 8513
+# "accessKey is invalid" solo desde ahí, la misma key funciona bien desde
+# otras IPs). Como solución gratuita, se prueban proxies públicos hasta
+# encontrar uno que no esté bloqueado, y se recuerda cuál funcionó para no
+# tener que probar la lista entera en cada llamada. Los proxies gratuitos
+# se caen seguido, por eso hay reintento con rotación en cada request.
+USE_PROXY = os.environ.get("ECOFLOW_USE_PROXY", "true").lower() != "false"
+PROXY_LIST_URL = (
+    "https://api.proxyscrape.com/v4/free-proxy-list/get"
+    "?request=display_proxies&proxy_format=protocolipport&format=text&protocol=http"
+)
+_proxy_pool = []
+_proxy_pool_fetched_at = 0
+_last_good_proxy = None
+
+
+def _refresh_proxy_pool() -> list:
+    global _proxy_pool, _proxy_pool_fetched_at
+    if _proxy_pool and time.time() - _proxy_pool_fetched_at < 1800:
+        return _proxy_pool
+    try:
+        resp = requests.get(PROXY_LIST_URL, timeout=10)
+        resp.raise_for_status()
+        proxies = [line.strip() for line in resp.text.splitlines() if line.strip()]
+        random.shuffle(proxies)
+        _proxy_pool = proxies
+        _proxy_pool_fetched_at = time.time()
+        log.info("Lista de proxies renovada: %d candidatos", len(proxies))
+    except Exception:
+        log.exception("No se pudo renovar la lista de proxies")
+    return _proxy_pool
+
+
+def _ecoflow_get(path: str, params: dict) -> dict:
+    """GET firmado a la API de EcoFlow, probando proxies hasta encontrar uno que no esté bloqueado."""
+    global _last_good_proxy
+
+    def _try(proxy_url):
+        headers = _signed_headers(params)
+        proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+        resp = requests.get(f"{API_HOST}{path}", params=params, headers=headers, proxies=proxies, timeout=8)
+        resp.raise_for_status()
+        payload = resp.json()
+        code = str(payload.get("code"))
+        if code == "8513":  # esta IP/proxy está bloqueada; hay que probar otra
+            raise ConnectionError("IP bloqueada por EcoFlow (8513)")
+        if code != "0":
+            raise RuntimeError(f"EcoFlow API error: {payload}")
+        return payload
+
+    if not USE_PROXY:
+        return _try(None)
+
+    candidates = []
+    if _last_good_proxy:
+        candidates.append(_last_good_proxy)
+    candidates += [p for p in _refresh_proxy_pool() if p != _last_good_proxy][:8]
+
+    last_exc = None
+    for proxy_url in candidates:
+        try:
+            payload = _try(proxy_url)
+            _last_good_proxy = proxy_url
+            return payload
+        except Exception as exc:
+            last_exc = exc
+            continue
+    raise RuntimeError(f"Ningún proxy funcionó (probados {len(candidates)}): {last_exc}")
+
+
+def _mqtt_topics(sn: str) -> dict:
+    return {
+        "get": f"/app/{_mqtt_user_id}/{sn}/thing/property/get",
+        "get_reply": f"/app/{_mqtt_user_id}/{sn}/thing/property/get_reply",
+        "data": f"/app/device/property/{sn}",
+    }
+
+
+def _private_login() -> tuple:
+    resp = requests.post(
+        f"https://{API_HOST}/auth/login",
+        headers={"lang": "en_US", "content-type": "application/json"},
+        json={
+            "email": ECOFLOW_EMAIL,
+            "password": base64.b64encode(ECOFLOW_PASSWORD.encode()).decode(),
+            "scene": "IOT_APP",
+            "userType": "ECOFLOW",
+        },
+        timeout=15,
+    )
     resp.raise_for_status()
-    payload = resp.json()
-    if str(payload.get("code")) != "0":
-        raise RuntimeError(f"EcoFlow API error para {sn}: {payload}")
+    data = resp.json()
+    if str(data.get("message", "")).lower() != "success":
+        raise RuntimeError(f"Login EcoFlow (private API) falló: {data}")
+    return data["data"]["token"], data["data"]["user"]["userId"]
+
+
+def _private_mqtt_creds(token: str) -> tuple:
+    resp = requests.get(
+        f"https://{API_HOST}/iot-auth/app/certification",
+        headers={"lang": "en_US", "authorization": f"Bearer {token}", "content-type": "application/json"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    d = resp.json()["data"]
+    return d["url"], int(d["port"]), d["certificateAccount"], d["certificatePassword"]
+
+
+def _request_quota_refresh(sn: str) -> None:
+    if _mqtt_client is None:
+        return
+    topics = _mqtt_topics(sn)
+    payload = json.dumps({"version": "1.1", "moduleType": 0, "operateType": "latestQuotas", "params": {}})
+    _mqtt_client.publish(topics["get"], payload)
+
+
+def _on_mqtt_message(client, userdata, msg):
+    try:
+        raw = json.loads(msg.payload.decode("utf-8", errors="ignore"))
+    except Exception:
+        return
+    for sn in (SN_DELTA2, SN_EXTRA):
+        if not sn:
+            continue
+        topics = _mqtt_topics(sn)
+        with _mqtt_cache_lock:
+            if msg.topic == topics["data"]:
+                entry = _device_cache.setdefault(sn, {})
+                entry.setdefault("quota", {}).update(raw.get("params", raw))
+                entry["updated_at"] = time.time()
+            elif msg.topic == topics["get_reply"] and raw.get("operateType") == "latestQuotas":
+                d = raw.get("data", {})
+                entry = _device_cache.setdefault(sn, {})
+                entry["online"] = bool(d.get("online"))
+                if d.get("online") and "quotaMap" in d:
+                    entry.setdefault("quota", {}).update(d["quotaMap"])
+                entry["updated_at"] = time.time()
+
+
+def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
+    if rc == 0:
+        log.info("Conectado al MQTT privado de EcoFlow")
+        for sn in (SN_DELTA2, SN_EXTRA):
+            if not sn:
+                continue
+            topics = _mqtt_topics(sn)
+            client.subscribe(topics["data"])
+            client.subscribe(topics["get_reply"])
+            _request_quota_refresh(sn)
+    else:
+        log.error("Fallo de conexión MQTT privado, rc=%s", rc)
+
+
+def start_private_mqtt() -> None:
+    """Login + credenciales MQTT + conexión persistente. Reintenta indefinidamente si falla."""
+    global _mqtt_client, _mqtt_user_id
+    if mqtt is None:
+        log.error("Falta la librería paho-mqtt (agregala a requirements.txt)")
+        return
+    while True:
+        try:
+            token, user_id = _private_login()
+            _mqtt_user_id = user_id
+            url, port, username, password = _private_mqtt_creds(token)
+            client_id = f"ANDROID_{uuid_lib.uuid4().hex.upper()}_{user_id}"
+            client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+            client.username_pw_set(username, password)
+            client.tls_set()
+            client.on_connect = _on_mqtt_connect
+            client.on_message = _on_mqtt_message
+            client.connect(url, port, keepalive=30)
+            _mqtt_client = client
+            log.info("Cliente MQTT privado iniciado (%s:%s)", url, port)
+            client.loop_forever(retry_first_connection=True)
+        except Exception:
+            log.exception("Error en el cliente MQTT privado; reintento en 30s")
+            time.sleep(30)
+
+
+def get_device_quota(sn: str) -> dict:
+    if USE_PRIVATE_API:
+        _request_quota_refresh(sn)
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            with _mqtt_cache_lock:
+                entry = _device_cache.get(sn)
+                if entry and entry.get("quota") and time.time() - entry.get("updated_at", 0) < 6:
+                    return entry["quota"]
+            time.sleep(0.3)
+        with _mqtt_cache_lock:
+            entry = _device_cache.get(sn)
+            if entry and entry.get("quota"):
+                return entry["quota"]  # dato viejo, mejor que nada
+        raise RuntimeError("Todavía no llegó ningún dato del dispositivo por MQTT")
+
+    payload = _ecoflow_get("/iot-open/sign/device/quota/all", {"sn": sn})
     return payload.get("data", {})
 
 
 def get_device_online(sn: str) -> bool:
-    headers = _signed_headers({})
-    resp = requests.get(f"{API_HOST}/iot-open/sign/device/list", headers=headers, timeout=30)
-    resp.raise_for_status()
-    payload = resp.json()
-    if str(payload.get("code")) != "0":
-        raise RuntimeError(f"EcoFlow API error (device list): {payload}")
+    if USE_PRIVATE_API:
+        with _mqtt_cache_lock:
+            return bool(_device_cache.get(sn, {}).get("online"))
+
+    payload = _ecoflow_get("/iot-open/sign/device/list", {})
     for dev in payload.get("data", []):
         if dev.get("sn") == sn:
             return dev.get("online") == 1
@@ -415,6 +628,8 @@ def main() -> None:
     threading.Thread(target=poll_commands, daemon=True).start()
     threading.Thread(target=report_timer, daemon=True).start()
     threading.Thread(target=ac_check_timer, daemon=True).start()
+    if USE_PRIVATE_API:
+        threading.Thread(target=start_private_mqtt, daemon=True).start()
 
     log.info("Monitor iniciado. Informe cada %.1fh, chequeo AC cada %.1f min.", INTERVAL_HOURS, AC_CHECK_MINUTES)
     while True:
