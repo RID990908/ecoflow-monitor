@@ -467,6 +467,8 @@ def build_report() -> str:
         source_emoji = " 🔌"
     elif is_solar_active:
         source_emoji = " ☀️"
+    elif battery_in_w > 0 or out_w > 0:
+        source_emoji = " 🔋"  # sin solar ni AC: corriendo (o transfiriendo) a batería
     else:
         source_emoji = ""
     status = "🟢 en línea" if online else "🔴 desconectada"
