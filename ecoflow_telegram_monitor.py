@@ -439,7 +439,6 @@ def set_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
-        {"command": "estado", "description": "Línea rápida combinada"},
         {"command": "pausa", "description": "Pausar los informes automáticos"},
         {"command": "reanudar", "description": "Reanudar los informes automáticos"},
         {"command": "ping", "description": "Ver si el bot está activo"},
@@ -543,40 +542,9 @@ def build_report() -> str:
     return "\n".join(lines)
 
 
-def build_quick_status() -> str:
-    """Resumen rápido, una línea por dato (no todo apretado en una sola línea). Para /estado."""
-    if not ECOFLOW_READY:
-        return "⏳ EcoFlow todavía no está configurado."
-
-    lines = []
-    soc_delta2 = None
-    soc_extra = None
-    try:
-        data = get_device_quota(SN_DELTA2)
-        soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
-        pv_w = get_pv_watts(data)
-        ac_w = get_ac_watts(data)
-        soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
-        lines.append(f"🔋 Delta 2: {soc_delta2_str}%")
-        lines.append(f"☀️ Solar (panel): {pv_w if pv_w is not None else 'N/D'} W")
-        lines.append(f"🔌 Corriente (AC): {ac_w if ac_w is not None else 0} W")
-
-        soc_extra = get_extra_battery_soc(data)
-        if soc_extra is not None:
-            lines.append(f"🔋 Extra: {soc_extra:.1f}%")
-    except Exception as exc:
-        lines.append(f"🔋 Delta 2: ⚠️ {exc}")
-
-    if soc_delta2 is not None and soc_extra is not None:
-        lines.append(f"🔷 Total: {round((soc_delta2 + soc_extra) / 2, 1):.1f}%")
-
-    return "\n".join(lines)
-
-
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
-    "/estado — línea rápida combinada (carga de ambas + solar + AC)\n"
     "/pausa — pausar los informes automáticos\n"
     "/reanudar — reanudar los informes automáticos\n"
     "/ping — ver si el bot está activo\n"
@@ -604,8 +572,6 @@ def handle_command(text: str, chat_id: str) -> None:
     cmd = text.strip().split()[0].split("@")[0].lower()
     if cmd == "/reporte":
         send_telegram(build_report(), chat_id=chat_id)
-    elif cmd == "/estado":
-        send_telegram(build_quick_status(), chat_id=chat_id)
     elif cmd == "/pausa":
         AUTO_PAUSED = True
         _save_persisted_state()
