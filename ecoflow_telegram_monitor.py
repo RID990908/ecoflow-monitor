@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Monitor EcoFlow (Delta 2 + batería extra) → informe por Telegram.
-
-Diseñado para correr como "tick" único disparado por cron (GitHub Actions),
-no como proceso continuo: cada ejecución revisa comandos pendientes de
-Telegram, manda el informe periódico si corresponde, y chequea si empezó a
-cargar por corriente. El estado (pausa, último informe, offset de Telegram,
-etc.) se persiste en STATE_FILE entre ejecuciones.
+Worker EcoFlow → Telegram. Ejecuta UNA acción puntual y termina — pensado para
+correr en GitHub Actions, disparado on-demand por orchestrator.py (que corre
+en Railway y decide CUÁNDO disparar cada acción: horario del informe, cada
+cuánto chequear la carga AC, o en respuesta a un comando del usuario). Este
+script no escucha Telegram ni mantiene ningún proceso corriendo — por eso
+puede vivir en GitHub Actions, la única IP que EcoFlow no bloquea.
 
 Variables de entorno requeridas:
   ECOFLOW_ACCESS_KEY   Access key de developer.ecoflow.com
@@ -15,12 +14,12 @@ Variables de entorno requeridas:
   ECOFLOW_SN_EXTRA     Número de serie de la batería extra (opcional)
   TELEGRAM_BOT_TOKEN   Token del bot (de @BotFather)
   TELEGRAM_CHAT_ID     Chat ID destino (de @userinfobot)
-  INTERVAL_HOURS       Intervalo del informe periódico en horas (default: 2)
-  TICK_MINUTES         Cada cuánto se dispara este script vía cron (solo informativo, default: 5)
-  STATE_FILE           Archivo de estado persistido (default: state.json)
+  ACTION               report | estado | ac_check
+  STATE_FILE           Archivo de estado persistido, solo para was_charging_ac (default: state.json)
 
 Uso:
-  python3 ecoflow_telegram_monitor.py    # un solo tick (pensado para cron)
+  ACTION=report python3 ecoflow_telegram_monitor.py
+  python3 ecoflow_telegram_monitor.py estado
 """
 
 import hashlib
@@ -66,22 +65,12 @@ BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
 INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "2"))
 ECOFLOW_READY = bool(ACCESS_KEY and SECRET_KEY and SN_DELTA2)
-TICK_MINUTES = float(os.environ.get("TICK_MINUTES", "5"))
 AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
 STATE_FILE = os.environ.get("STATE_FILE", "state.json")
 if not ECOFLOW_READY:
-    log.warning(
-        "EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2); "
-        "el bot responde comandos de Telegram pero /reporte no va a poder consultar el dispositivo."
-    )
+    log.warning("EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2)")
 
-DEFAULT_STATE = {
-    "telegram_offset": 0,
-    "auto_paused": False,
-    "last_report_ts": 0,
-    "was_charging_ac": False,
-    "last_tick_ts": 0,
-}
+DEFAULT_STATE = {"was_charging_ac": False}
 
 
 def load_state() -> dict:
@@ -228,24 +217,6 @@ def send_telegram(text: str, chat_id: str = None) -> None:
         raise RuntimeError(f"Telegram API error: {payload}")
 
 
-def set_bot_commands() -> None:
-    commands = [
-        {"command": "start", "description": "Qué hace este bot"},
-        {"command": "reporte", "description": "Informe detallado por dispositivo"},
-        {"command": "estado", "description": "Línea rápida combinada"},
-        {"command": "pausa", "description": "Pausar los informes automáticos"},
-        {"command": "reanudar", "description": "Reanudar los informes automáticos"},
-        {"command": "ping", "description": "Ver si el bot está activo"},
-        {"command": "help", "description": "Ver comandos disponibles"},
-    ]
-    resp = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
-        json={"commands": commands},
-        timeout=30,
-    )
-    resp.raise_for_status()
-
-
 # Delta 2 y batería extra son de la misma capacidad (1024Wh cada una), así que
 # el promedio simple de sus %SOC es válido: ambas pesan lo mismo en el total.
 BATTERY_CAPACITY_WH = 1024
@@ -333,94 +304,9 @@ def build_quick_status() -> str:
     return "🔋 " + " · ".join(parts)
 
 
-HELP_TEXT = (
-    "🤖 *Monitor EcoFlow*\n\n"
-    "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
-    "/estado — línea rápida combinada (carga de ambas + solar)\n"
-    "/pausa — pausar los informes automáticos\n"
-    "/reanudar — reanudar los informes automáticos\n"
-    "/ping — ver si el bot está activo\n"
-    "/start — qué hace este bot\n"
-    "/help — ver esta ayuda\n\n"
-    f"Reporte automático cada {INTERVAL_HOURS:g}h (si no está pausado).\n"
-    f"⚡ Además te aviso apenas empiece a cargar por corriente.\n"
-    f"(Los comandos se revisan cada ~{TICK_MINUTES:g} min, no son instantáneos.)"
-)
-START_TEXT = (
-    "👋 Hola, soy el monitor de tu EcoFlow.\n"
-    f"Te mando un reporte automático cada {INTERVAL_HOURS:g}h con la carga de la "
-    "Delta 2, la batería extra y la entrada solar.\n\n" + HELP_TEXT
-)
-
-
-def handle_command(text: str, chat_id: str, state: dict) -> None:
-    cmd = text.strip().split()[0].split("@")[0].lower()
-    if cmd == "/reporte":
-        send_telegram(build_report(), chat_id=chat_id)
-    elif cmd == "/estado":
-        send_telegram(build_quick_status(), chat_id=chat_id)
-    elif cmd == "/pausa":
-        state["auto_paused"] = True
-        send_telegram("⏸ Informes automáticos pausados. Usá /reanudar para reactivarlos.", chat_id=chat_id)
-    elif cmd == "/reanudar":
-        state["auto_paused"] = False
-        send_telegram("▶️ Informes automáticos reanudados.", chat_id=chat_id)
-    elif cmd == "/ping":
-        estado_ecoflow = "🟢 EcoFlow configurado" if ECOFLOW_READY else "⏳ EcoFlow sin configurar"
-        estado_auto = "⏸ pausado" if state["auto_paused"] else "▶️ activo"
-        last_tick = state.get("last_tick_ts", 0)
-        hace = f"{int(time.time() - last_tick)}s" if last_tick else "recién ahora (primera vez)"
-        send_telegram(
-            f"🏓 Pong. Último chequeo hace {hace}.\n{estado_ecoflow} · Automático {estado_auto}",
-            chat_id=chat_id,
-        )
-    elif cmd == "/start":
-        send_telegram(START_TEXT, chat_id=chat_id)
-    elif cmd == "/help":
-        send_telegram(HELP_TEXT, chat_id=chat_id)
-
-
-def process_commands(state: dict) -> None:
-    """Revisa comandos pendientes de Telegram (sin long-polling) y responde. Ignora otros chats."""
-    resp = requests.get(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
-        params={"offset": state["telegram_offset"], "timeout": 0},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    for update in payload.get("result", []):
-        state["telegram_offset"] = update["update_id"] + 1
-        message = update.get("message", {})
-        text = message.get("text", "")
-        chat_id = str(message.get("chat", {}).get("id", ""))
-        if not text.startswith("/"):
-            continue
-        if chat_id != CHAT_ID:
-            log.info("Comando ignorado de chat no autorizado: %s", chat_id)
-            continue
-        try:
-            handle_command(text, chat_id, state)
-        except Exception:
-            log.exception("Error respondiendo comando %s", text)
-
-
-def check_periodic_report(state: dict) -> None:
-    if not ECOFLOW_READY or state["auto_paused"]:
-        return
-    if time.time() - state.get("last_report_ts", 0) < INTERVAL_HOURS * 3600:
-        return
-    try:
-        send_telegram(build_report())
-        state["last_report_ts"] = time.time()
-        log.info("Informe periódico enviado")
-    except Exception:
-        log.exception("Fallo enviando el informe periódico")
-
-
 def check_ac_charging(state: dict) -> None:
     """Avisa apenas la Delta 2 empieza a cargar por corriente (AC), sin esperar al reporte periódico."""
-    if not ECOFLOW_READY or state["auto_paused"]:
+    if not ECOFLOW_READY:
         return
     try:
         data = get_device_quota(SN_DELTA2)
@@ -434,22 +320,29 @@ def check_ac_charging(state: dict) -> None:
         log.exception("Error chequeando carga por AC")
 
 
-def tick() -> None:
-    state = load_state()
-    try:
-        set_bot_commands()
-    except Exception:
-        log.exception("No se pudo registrar el menú de comandos (no bloqueante)")
-    try:
-        process_commands(state)
-    except Exception:
-        log.exception("Error revisando comandos de Telegram")
-    check_periodic_report(state)
-    check_ac_charging(state)
-    state["last_tick_ts"] = time.time()
-    save_state(state)
-    log.info("Tick completo")
+def run_action(action: str) -> None:
+    """Ejecuta UNA acción puntual (disparada por el orquestador en Railway vía workflow_dispatch)
+    y termina. Este script ya no escucha comandos de Telegram — eso lo hace orchestrator.py
+    en Railway, que es quien decide cuándo disparar cada acción."""
+    if action == "report":
+        send_telegram(build_report())
+        log.info("Informe enviado")
+    elif action == "estado":
+        send_telegram(build_quick_status())
+        log.info("Estado rápido enviado")
+    elif action == "ac_check":
+        state = load_state()
+        check_ac_charging(state)
+        save_state(state)
+        log.info("Chequeo de carga AC completo")
+    else:
+        log.error("Acción desconocida: %s (esperaba report/estado/ac_check)", action)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    tick()
+    action_arg = os.environ.get("ACTION") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    if not action_arg:
+        log.error("Falta indicar la acción (variable de entorno ACTION o primer argumento)")
+        sys.exit(1)
+    run_action(action_arg)

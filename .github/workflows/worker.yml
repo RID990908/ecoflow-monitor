@@ -1,16 +1,27 @@
-name: EcoFlow Monitor Tick
+name: EcoFlow Worker
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      action:
+        description: "Acción a ejecutar"
+        required: true
+        type: choice
+        options:
+          - report
+          - estado
+          - ac_check
+  schedule:
+    # Respaldo por si el orquestador de Railway está caído: chequea carga AC
+    # cada 15 min igual, para no perder la alerta por completo.
+    - cron: "*/15 * * * *"
 
 concurrency:
-  group: ecoflow-monitor-tick
+  group: ecoflow-worker
   cancel-in-progress: false
 
 jobs:
-  tick:
+  run:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -23,15 +34,14 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Run tick
+      - name: Run action
         env:
           ECOFLOW_ACCESS_KEY: ${{ secrets.ECOFLOW_ACCESS_KEY }}
           ECOFLOW_SECRET_KEY: ${{ secrets.ECOFLOW_SECRET_KEY }}
           ECOFLOW_SN_DELTA2: ${{ secrets.ECOFLOW_SN_DELTA2 }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          INTERVAL_HOURS: "1"
-          TICK_MINUTES: "5"
+          ACTION: ${{ github.event.inputs.action || 'ac_check' }}
         run: python ecoflow_telegram_monitor.py
 
       - name: Persist state
