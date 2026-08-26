@@ -690,7 +690,7 @@ def ac_check_timer() -> None:
 
 
 WATCHDOG_CHECK_MINUTES = 5
-WATCHDOG_STALE_MINUTES = 10  # sin datos frescos por más de esto = alerta
+WATCHDOG_STALE_MINUTES = 5  # sin datos frescos por más de esto = alerta
 
 
 def watchdog_timer() -> None:
