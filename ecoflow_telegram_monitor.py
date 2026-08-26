@@ -468,12 +468,12 @@ def _charge_source(pv_w, ac_w) -> tuple:
 
 def _battery_flow_emoji(net_w) -> tuple:
     """(emoji_batería, sufijo_texto) según el neto: 🟢 + 🔌 si carga,
-    🔴 si descarga (sin conector, el color ya lo dice), 🔋 si no hay flujo."""
+    🪫 si descarga, 🔋 si no hay flujo."""
     if net_w is None or -NOISE_FLOOR_W <= net_w <= NOISE_FLOOR_W:
         return "🔋", ""
     if net_w > NOISE_FLOOR_W:
         return "🟢", f" 🔌 ({round(net_w)} W)"
-    return "🔴", f" ({abs(round(net_w))} W)"
+    return "🪫", f" ({abs(round(net_w))} W)"
 
 
 # Delta 2 y batería extra son de la misma capacidad, así que el promedio
