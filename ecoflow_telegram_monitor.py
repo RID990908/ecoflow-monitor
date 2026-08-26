@@ -123,12 +123,6 @@ WAS_FULL = _persisted.get("was_full", False)
 LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 _DATA_STALE_ALERTED = False
 
-# Trend contra el último informe generado (no se persiste: alcanza con que
-# sobreviva mientras el proceso está corriendo, se resetea en cada redeploy).
-_last_report_soc = None
-_last_report_at = None
-_last_report_lock = threading.Lock()
-
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
 _mqtt_user_id = None
@@ -509,25 +503,6 @@ def _last_ac_line() -> str:
     return f"⚡ Última vez que llegó corriente: hace {_format_elapsed(time.time() - LAST_AC_TIMESTAMP)}"
 
 
-def _trend_line(soc_now) -> str:
-    """Compara contra el %SOC combinado del informe anterior (en memoria, se
-    resetea en cada redeploy) para mostrar si viene subiendo o bajando."""
-    global _last_report_soc, _last_report_at
-    line = ""
-    with _last_report_lock:
-        if soc_now is not None and _last_report_soc is not None and _last_report_at is not None:
-            elapsed = time.time() - _last_report_at
-            if elapsed >= 300:  # evita ruido si se pide /reporte dos veces seguidas
-                diff = round(soc_now - _last_report_soc, 1)
-                arrow = "📈" if diff > 0 else "📉" if diff < 0 else "➡️"
-                sign = "+" if diff > 0 else ""
-                line = f"{arrow} Tendencia: {sign}{diff}% en las últimas {_format_elapsed(elapsed)}"
-        if soc_now is not None:
-            _last_report_soc = soc_now
-            _last_report_at = time.time()
-    return line
-
-
 def build_report() -> str:
     if not ECOFLOW_READY:
         return (
@@ -574,10 +549,6 @@ def build_report() -> str:
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
-    soc_avg = round((soc_delta2 + soc_extra) / 2, 1) if soc_delta2 is not None and soc_extra is not None else soc_delta2
-    trend = _trend_line(soc_avg)
-    if trend:
-        lines.append(trend)
     lines.append("")
 
     lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(ac_w) + ' W)' if ac_w > NOISE_FLOOR_W else 'No'}")
