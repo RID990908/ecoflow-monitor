@@ -5,7 +5,7 @@ Monitor EcoFlow (Delta 2 + batería extra) → informe por Telegram.
 Un solo proceso, corre 24/7 en Railway: escucha comandos de Telegram al
 instante (long polling) y en paralelo chequea cada cierto tiempo si toca
 mandar el informe periódico o si empezó a cargar por corriente. Todo el
-estado (pausa, última carga AC) vive en memoria mientras el proceso corre.
+estado (última carga AC, umbrales de alerta) se persiste en /data/state.json.
 
 Variables de entorno requeridas:
   ECOFLOW_ACCESS_KEY   Access key de developer.ecoflow.com
@@ -87,8 +87,8 @@ elif USE_PRIVATE_API:
 START_TIME = time.time()
 
 # Se persiste en un volumen de Railway (/data por default) para sobrevivir
-# redeploys — sin esto, /pausa y "ya avisé que llegó la corriente" se
-# resetean cada vez que se sube código nuevo.
+# redeploys — sin esto, "ya avisé que llegó la corriente" y los umbrales de
+# alerta se resetean cada vez que se sube código nuevo.
 STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
 
 
@@ -103,14 +103,24 @@ def _load_persisted_state() -> dict:
 def _save_persisted_state() -> None:
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"auto_paused": AUTO_PAUSED, "was_charging_ac": WAS_CHARGING_AC}, f)
+            json.dump(
+                {
+                    "was_charging_ac": WAS_CHARGING_AC,
+                    "battery_low_threshold": BATTERY_LOW_THRESHOLD,
+                    "was_below_low_threshold": WAS_BELOW_LOW_THRESHOLD,
+                    "was_full": WAS_FULL,
+                },
+                f,
+            )
     except OSError:
         log.exception("No se pudo guardar el estado persistido en %s", STATE_FILE)
 
 
 _persisted = _load_persisted_state()
-AUTO_PAUSED = _persisted.get("auto_paused", False)
 WAS_CHARGING_AC = _persisted.get("was_charging_ac", False)
+BATTERY_LOW_THRESHOLD = _persisted.get("battery_low_threshold", 20)
+WAS_BELOW_LOW_THRESHOLD = _persisted.get("was_below_low_threshold", False)
+WAS_FULL = _persisted.get("was_full", False)
 _DATA_STALE_ALERTED = False
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
@@ -227,7 +237,22 @@ def _mqtt_topics(sn: str) -> dict:
         "get": f"/app/{_mqtt_user_id}/{sn}/thing/property/get",
         "get_reply": f"/app/{_mqtt_user_id}/{sn}/thing/property/get_reply",
         "data": f"/app/device/property/{sn}",
+        "set": f"/app/{_mqtt_user_id}/{sn}/thing/property/set",
     }
+
+
+def publish_set_command(sn: str, module_type: int, operate_type: str, params: dict) -> bool:
+    """Manda un comando de control (encender/apagar salidas) al dispositivo por MQTT."""
+    if _mqtt_client is None:
+        log.error("No se puede mandar comando: cliente MQTT no conectado")
+        return False
+    topic = _mqtt_topics(sn)["set"]
+    payload = json.dumps(
+        {"version": "1.1", "moduleType": module_type, "operateType": operate_type, "params": params}
+    )
+    _mqtt_client.publish(topic, payload)
+    log.info("Comando enviado: %s %s", operate_type, params)
+    return True
 
 
 def _private_login() -> tuple:
@@ -439,8 +464,11 @@ def set_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
-        {"command": "pausa", "description": "Pausar los informes automáticos"},
-        {"command": "reanudar", "description": "Reanudar los informes automáticos"},
+        {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
+        {"command": "encender_ca", "description": "Prender la salida de corriente (CA)"},
+        {"command": "apagar_ca", "description": "Apagar la salida de corriente (CA)"},
+        {"command": "encender_usb", "description": "Prender la salida USB"},
+        {"command": "apagar_usb", "description": "Apagar la salida USB"},
         {"command": "ping", "description": "Ver si el bot está activo"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
@@ -545,13 +573,14 @@ def build_report() -> str:
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
-    "/pausa — pausar los informes automáticos\n"
-    "/reanudar — reanudar los informes automáticos\n"
+    "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
+    "/encender_ca y /apagar_ca — prender/apagar la salida de corriente (CA)\n"
+    "/encender_usb y /apagar_usb — prender/apagar la salida USB\n"
     "/ping — ver si el bot está activo\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
-    f"Informe automático cada {INTERVAL_HOURS:g}h · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min "
-    "(si no está pausado)."
+    f"Informe automático cada {INTERVAL_HOURS:g}h · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
+    "También te aviso al llegar a 100% de carga."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
@@ -568,23 +597,43 @@ def _format_uptime() -> str:
 
 
 def handle_command(text: str, chat_id: str) -> None:
-    global AUTO_PAUSED
-    cmd = text.strip().split()[0].split("@")[0].lower()
+    global BATTERY_LOW_THRESHOLD
+    parts = text.strip().split()
+    cmd = parts[0].split("@")[0].lower()
     if cmd == "/reporte":
         send_telegram(build_report(), chat_id=chat_id)
-    elif cmd == "/pausa":
-        AUTO_PAUSED = True
-        _save_persisted_state()
-        send_telegram("⏸ Informes automáticos pausados. Usá /reanudar para reactivarlos.", chat_id=chat_id)
-    elif cmd == "/reanudar":
-        AUTO_PAUSED = False
-        _save_persisted_state()
-        send_telegram("▶️ Informes automáticos reanudados.", chat_id=chat_id)
+    elif cmd == "/alerta":
+        if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
+            send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)
+        else:
+            BATTERY_LOW_THRESHOLD = int(parts[1])
+            _save_persisted_state()
+            send_telegram(f"🔔 Te voy a avisar cuando la carga baje de {BATTERY_LOW_THRESHOLD}%.", chat_id=chat_id)
+    elif cmd in ("/encender_ca", "/apagar_ca"):
+        if not ECOFLOW_READY:
+            send_telegram("⏳ EcoFlow todavía no está configurado.", chat_id=chat_id)
+        else:
+            enabled = 1 if cmd == "/encender_ca" else 0
+            ok = publish_set_command(
+                SN_DELTA2, 5, "acOutCfg",
+                {"enabled": enabled, "out_voltage": -1, "out_freq": 255, "xboost": 255},
+            )
+            verbo = "Prendiendo" if enabled else "Apagando"
+            msg = f"🔌 {verbo} la salida de corriente (CA)..." if ok else "⚠️ No pude enviar el comando (MQTT no conectado)."
+            send_telegram(msg, chat_id=chat_id)
+    elif cmd in ("/encender_usb", "/apagar_usb"):
+        if not ECOFLOW_READY:
+            send_telegram("⏳ EcoFlow todavía no está configurado.", chat_id=chat_id)
+        else:
+            enabled = 1 if cmd == "/encender_usb" else 0
+            ok = publish_set_command(SN_DELTA2, 1, "dcOutCfg", {"enabled": enabled})
+            verbo = "Prendiendo" if enabled else "Apagando"
+            msg = f"🔌 {verbo} la salida USB..." if ok else "⚠️ No pude enviar el comando (MQTT no conectado)."
+            send_telegram(msg, chat_id=chat_id)
     elif cmd == "/ping":
         estado_ecoflow = "🟢 EcoFlow configurado" if ECOFLOW_READY else "⏳ EcoFlow sin configurar"
-        estado_auto = "⏸ pausado" if AUTO_PAUSED else "▶️ activo"
         send_telegram(
-            f"🏓 Pong. Activo hace {_format_uptime()}.\n{estado_ecoflow} · Automático {estado_auto}",
+            f"🏓 Pong. Activo hace {_format_uptime()}.\n{estado_ecoflow}",
             chat_id=chat_id,
         )
     elif cmd == "/start":
@@ -627,8 +676,8 @@ def poll_commands() -> None:
 def report_timer() -> None:
     while True:
         time.sleep(INTERVAL_HOURS * 3600)
-        if AUTO_PAUSED or not ECOFLOW_READY:
-            log.info("Informe automático omitido (pausado o EcoFlow no configurado)")
+        if not ECOFLOW_READY:
+            log.info("Informe automático omitido (EcoFlow no configurado)")
             continue
         try:
             send_telegram(build_report())
@@ -637,11 +686,17 @@ def report_timer() -> None:
             log.exception("Fallo enviando el informe periódico")
 
 
+FULL_CHARGE_THRESHOLD = 99  # % a partir del cual se considera "carga completa"
+FULL_CHARGE_RESET_THRESHOLD = 95  # baja de esto para poder volver a avisar
+
+
 def ac_check_timer() -> None:
-    global WAS_CHARGING_AC
+    """Chequea, en un mismo ciclo: si llegó la corriente, si la carga bajó del
+    umbral configurado con /alerta, y si terminó de cargar (100%)."""
+    global WAS_CHARGING_AC, WAS_BELOW_LOW_THRESHOLD, WAS_FULL
     while True:
         time.sleep(AC_CHECK_MINUTES * 60)
-        if AUTO_PAUSED or not ECOFLOW_READY:
+        if not ECOFLOW_READY:
             continue
         try:
             data = get_device_quota(SN_DELTA2)
@@ -651,8 +706,32 @@ def ac_check_timer() -> None:
             if is_charging and not WAS_CHARGING_AC:
                 send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
                 log.info("Notificado inicio de carga AC (%s W)", ac_w)
-            if is_charging != WAS_CHARGING_AC:
-                WAS_CHARGING_AC = is_charging
+
+            soc = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc")
+            state_changed = is_charging != WAS_CHARGING_AC
+            WAS_CHARGING_AC = is_charging
+
+            if soc is not None:
+                is_below = soc < BATTERY_LOW_THRESHOLD
+                if is_below and not WAS_BELOW_LOW_THRESHOLD:
+                    send_telegram(f"🪫 La carga bajó de {BATTERY_LOW_THRESHOLD}% (ahora {soc:.1f}%).")
+                    log.info("Notificada carga baja (%.1f%%)", soc)
+                if is_below != WAS_BELOW_LOW_THRESHOLD:
+                    WAS_BELOW_LOW_THRESHOLD = is_below
+                    state_changed = True
+
+                is_full = soc >= FULL_CHARGE_THRESHOLD
+                if is_full and not WAS_FULL:
+                    send_telegram(f"🔋 La Delta 2 terminó de cargar ({soc:.1f}%).")
+                    log.info("Notificada carga completa (%.1f%%)", soc)
+                if is_full and not WAS_FULL:
+                    WAS_FULL = True
+                    state_changed = True
+                elif not is_full and soc < FULL_CHARGE_RESET_THRESHOLD and WAS_FULL:
+                    WAS_FULL = False
+                    state_changed = True
+
+            if state_changed:
                 _save_persisted_state()
         except Exception:
             log.exception("Error chequeando carga por AC")
@@ -669,7 +748,7 @@ def watchdog_timer() -> None:
     global _DATA_STALE_ALERTED
     while True:
         time.sleep(WATCHDOG_CHECK_MINUTES * 60)
-        if AUTO_PAUSED or not ECOFLOW_READY or not USE_PRIVATE_API:
+        if not ECOFLOW_READY or not USE_PRIVATE_API:
             continue
         with _mqtt_cache_lock:
             entry = _device_cache.get(SN_DELTA2, {})
