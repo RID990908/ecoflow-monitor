@@ -63,6 +63,12 @@ START_TIME = time.time()
 AUTO_PAUSED = False
 AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "30"))
 AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
+if ECOFLOW_READY:
+    try:
+        my_ip = requests.get("https://api.ipify.org", timeout=10).text
+        log.info("DIAG: API_HOST=%s · IP saliente=%s", API_HOST, my_ip)
+    except Exception:
+        log.exception("DIAG: no se pudo obtener la IP saliente")
 if not ECOFLOW_READY:
     log.warning(
         "EcoFlow no configurado todavía (faltan ACCESS_KEY/SECRET_KEY/SN_DELTA2); "
