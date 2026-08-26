@@ -405,17 +405,13 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
-# Delta 2 y batería extra son de la misma capacidad (1024Wh cada una), así que
-# el promedio simple de sus %SOC es válido: ambas pesan lo mismo en el total.
-BATTERY_CAPACITY_WH = 1024
-
-
+# Delta 2 y batería extra son de la misma capacidad, así que el promedio
+# simple de sus %SOC es válido: ambas pesan lo mismo en el total.
 def _combined_line(soc_delta2, soc_extra) -> str:
     if soc_delta2 is None or soc_extra is None:
         return ""
     avg = round((soc_delta2 + soc_extra) / 2, 1)
-    total_wh = round(avg / 100 * BATTERY_CAPACITY_WH * 2)
-    return f"🔋 *Total combinado*: *{avg}%* (~{total_wh} Wh de {BATTERY_CAPACITY_WH * 2} Wh)"
+    return f"🔋 *Total combinado*: *{avg}%*"
 
 
 def build_report() -> str:
@@ -443,7 +439,6 @@ def build_report() -> str:
     delta2_in_w = _pick(data, "bms_bmsStatus.inputWatts")
     extra_in_w = _pick(data, "bms_slave.inputWatts")
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
-    temp = _pick(data, "bms_bmsStatus.temp", "inv.outTemp")
 
     # En el encabezado, qué fuente está cargando ahora mismo (si alguna)
     if (ac_w or 0) > AC_WATTS_THRESHOLD:
@@ -472,21 +467,12 @@ def build_report() -> str:
 
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 0} W")
-    lines.append(f"⚡ Entrada desde batería: {battery_discharge_w if battery_discharge_w is not None else 'N/D'} W")
+    lines.append(f"⚡ Entrada desde batería: {battery_discharge_w if battery_discharge_w is not None else 0} W")
     lines.append(f"📤 Salida: {out_w} W")
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
         verb = "para llenarse" if int(remain_min) > 0 and total_in_w > out_w else "de autonomía"
         lines.append(f"⏱ ~{hours}h {minutes}m {verb}")
-    if temp is not None:
-        lines.append(f"🌡 Temperatura: {temp}°C")
-
-    cycles = _pick(data, "bms_bmsStatus.cycles")
-    soh = _pick(data, "bms_bmsStatus.soh")
-    if cycles is not None:
-        lines.append(f"🔁 Ciclos de carga: {cycles}")
-    if soh is not None:
-        lines.append(f"💚 Salud de la batería: {soh}%")
 
     ports = [
         ("USB-C 1", _pick(data, "pd.typec1Watts")),
