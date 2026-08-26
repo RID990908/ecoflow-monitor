@@ -32,7 +32,8 @@ import sys
 import threading
 import time
 import uuid as uuid_lib
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -67,6 +68,12 @@ CHAT_ID = require_env("TELEGRAM_CHAT_ID")
 INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "1"))
 AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "1"))
 AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
+
+# Railway corre en UTC; esto es solo para mostrar horas locales (hora estimada
+# de autonomía, horario del resumen diario). zoneinfo maneja el horario de
+# verano de Cuba automáticamente.
+TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Havana"))
+DAILY_SUMMARY_HOUR = int(os.environ.get("DAILY_SUMMARY_HOUR", "22"))
 
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
@@ -122,6 +129,13 @@ WAS_BELOW_LOW_THRESHOLD = _persisted.get("was_below_low_threshold", False)
 WAS_FULL = _persisted.get("was_full", False)
 LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 _DATA_STALE_ALERTED = False
+
+# Acumuladores del resumen diario (en memoria; si hay un redeploy en medio del
+# día se pierde lo acumulado hasta ese momento, es un dato informativo, no crítico).
+_daily_solar_wh = 0.0
+_daily_consumed_wh = 0.0
+_daily_lock = threading.Lock()
+_daily_summary_sent_date = None
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
@@ -558,8 +572,11 @@ def build_report() -> str:
 
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
-        verb = "para llenarse" if int(remain_min) > 0 and total_in_w > out_w else "de autonomía"
-        lines.append(f"⏱ ~{hours}h {minutes}m {verb}")
+        charging_up = int(remain_min) > 0 and total_in_w > out_w
+        verb = "para llenarse" if charging_up else "de autonomía"
+        eta = datetime.now(TZ) + timedelta(minutes=abs(int(remain_min)))
+        eta_verb = "vas a estar full a las" if charging_up else "a este consumo, te alcanza hasta las"
+        lines.append(f"⏱ ~{hours}h {minutes}m {verb} ({eta_verb} {eta.strftime('%H:%M')})")
 
     ports = [
         ("USB-C 1", _pick(data, "pd.typec1Watts")),
@@ -665,6 +682,7 @@ def ac_check_timer() -> None:
     """Chequea, en un mismo ciclo: si llegó la corriente, si la carga bajó del
     umbral configurado con /alerta, y si terminó de cargar (100%)."""
     global WAS_CHARGING_AC, WAS_BELOW_LOW_THRESHOLD, WAS_FULL, LAST_AC_TIMESTAMP
+    global _daily_solar_wh, _daily_consumed_wh
     while True:
         time.sleep(AC_CHECK_MINUTES * 60)
         if not ECOFLOW_READY:
@@ -672,6 +690,10 @@ def ac_check_timer() -> None:
         try:
             data = get_device_quota(SN_DELTA2)
             pv_w = get_pv_watts(data)
+            out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
+            with _daily_lock:
+                _daily_solar_wh += (pv_w or 0) * (AC_CHECK_MINUTES / 60)
+                _daily_consumed_wh += (out_w or 0) * (AC_CHECK_MINUTES / 60)
             ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
             is_charging = ac_w > AC_WATTS_THRESHOLD
             if is_charging and not WAS_CHARGING_AC:
@@ -747,6 +769,34 @@ def watchdog_timer() -> None:
             log.exception("Error en el watchdog de datos")
 
 
+def daily_summary_timer() -> None:
+    """Una vez por día, a la hora configurada (DAILY_SUMMARY_HOUR, hora local),
+    manda cuánto entró de solar y cuánto se consumió en total ese día."""
+    global _daily_solar_wh, _daily_consumed_wh, _daily_summary_sent_date
+    while True:
+        time.sleep(300)
+        if not ECOFLOW_READY:
+            continue
+        now = datetime.now(TZ)
+        today = now.date()
+        if now.hour != DAILY_SUMMARY_HOUR or _daily_summary_sent_date == today:
+            continue
+        try:
+            with _daily_lock:
+                solar_wh, consumed_wh = _daily_solar_wh, _daily_consumed_wh
+                _daily_solar_wh = 0.0
+                _daily_consumed_wh = 0.0
+            send_telegram(
+                "🌙 *Resumen del día*\n\n"
+                f"☀️ Entró de solar: {solar_wh / 1000:.2f} kWh\n"
+                f"📤 Se consumió: {consumed_wh / 1000:.2f} kWh"
+            )
+            _daily_summary_sent_date = today
+            log.info("Resumen diario enviado (%.0f Wh solar, %.0f Wh consumido)", solar_wh, consumed_wh)
+        except Exception:
+            log.exception("Error mandando el resumen diario")
+
+
 def main() -> None:
     try:
         set_bot_commands()
@@ -757,6 +807,7 @@ def main() -> None:
     threading.Thread(target=report_timer, daemon=True).start()
     threading.Thread(target=ac_check_timer, daemon=True).start()
     threading.Thread(target=watchdog_timer, daemon=True).start()
+    threading.Thread(target=daily_summary_timer, daemon=True).start()
     if USE_PRIVATE_API:
         threading.Thread(target=start_private_mqtt, daemon=True).start()
 
