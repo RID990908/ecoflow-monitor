@@ -388,8 +388,8 @@ def format_delta2_report(data: dict, online: bool) -> str:
     lines = [f"🔋 *Delta 2* {'🟢 en línea' if online else '🔴 desconectada'}"]
     if soc is not None:
         lines.append(f"Carga: *{soc}%*")
-    lines.append(f"☀️ Entrada solar (MPPT): *{pv_w if pv_w is not None else 'N/D'} W*")
-    lines.append(f"🔌 Entrada por corriente (AC): *{ac_w if ac_w is not None else 'N/D'} W*")
+    lines.append(f"☀️ Solar (panel): *{pv_w if pv_w is not None else 'N/D'} W*")
+    lines.append(f"🔌 Corriente (AC): *{ac_w if ac_w is not None else 'N/D'} W*")
     lines.append(f"⚡ Entrada total: {total_in_w} W · Salida: {out_w} W")
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
@@ -506,8 +506,8 @@ def build_quick_status() -> str:
         pv_w = get_pv_watts(data)
         ac_w = _estimate_ac_watts(data, pv_w)
         lines.append(f"🔋 Delta 2: {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
-        lines.append(f"☀️ Solar: {pv_w if pv_w is not None else 'N/D'} W")
-        lines.append(f"🔌 AC: {ac_w if ac_w is not None else 'N/D'} W")
+        lines.append(f"☀️ Solar (panel): {pv_w if pv_w is not None else 'N/D'} W")
+        lines.append(f"🔌 Corriente (AC): {ac_w if ac_w is not None else 'N/D'} W")
     except Exception as exc:
         lines.append(f"🔋 Delta 2: ⚠️ {exc}")
 
