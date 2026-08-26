@@ -85,8 +85,33 @@ elif USE_PRIVATE_API:
     log.info("Usando el modo 'private API' (MQTT con email/password) en vez de las developer keys")
 
 START_TIME = time.time()
-AUTO_PAUSED = False
-WAS_CHARGING_AC = False
+
+# Se persiste en un volumen de Railway (/data por default) para sobrevivir
+# redeploys — sin esto, /pausa y "ya avisé que llegó la corriente" se
+# resetean cada vez que se sube código nuevo.
+STATE_FILE = os.environ.get("STATE_FILE", "/data/state.json")
+
+
+def _load_persisted_state() -> dict:
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_persisted_state() -> None:
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"auto_paused": AUTO_PAUSED, "was_charging_ac": WAS_CHARGING_AC}, f)
+    except OSError:
+        log.exception("No se pudo guardar el estado persistido en %s", STATE_FILE)
+
+
+_persisted = _load_persisted_state()
+AUTO_PAUSED = _persisted.get("auto_paused", False)
+WAS_CHARGING_AC = _persisted.get("was_charging_ac", False)
+_DATA_STALE_ALERTED = False
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
@@ -583,9 +608,11 @@ def handle_command(text: str, chat_id: str) -> None:
         send_telegram(build_quick_status(), chat_id=chat_id)
     elif cmd == "/pausa":
         AUTO_PAUSED = True
+        _save_persisted_state()
         send_telegram("⏸ Informes automáticos pausados. Usá /reanudar para reactivarlos.", chat_id=chat_id)
     elif cmd == "/reanudar":
         AUTO_PAUSED = False
+        _save_persisted_state()
         send_telegram("▶️ Informes automáticos reanudados.", chat_id=chat_id)
     elif cmd == "/ping":
         estado_ecoflow = "🟢 EcoFlow configurado" if ECOFLOW_READY else "⏳ EcoFlow sin configurar"
@@ -658,9 +685,46 @@ def ac_check_timer() -> None:
             if is_charging and not WAS_CHARGING_AC:
                 send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
                 log.info("Notificado inicio de carga AC (%s W)", ac_w)
-            WAS_CHARGING_AC = is_charging
+            if is_charging != WAS_CHARGING_AC:
+                WAS_CHARGING_AC = is_charging
+                _save_persisted_state()
         except Exception:
             log.exception("Error chequeando carga por AC")
+
+
+WATCHDOG_CHECK_MINUTES = 5
+WATCHDOG_STALE_MINUTES = 10  # sin datos frescos por más de esto = alerta
+
+
+def watchdog_timer() -> None:
+    """Avisa si dejamos de recibir datos del dispositivo por MQTT (conexión
+    caída, credenciales vencidas, etc.) — sin esto, un corte silencioso solo
+    se nota cuando el usuario nota que dejaron de llegar informes."""
+    global _DATA_STALE_ALERTED
+    while True:
+        time.sleep(WATCHDOG_CHECK_MINUTES * 60)
+        if AUTO_PAUSED or not ECOFLOW_READY or not USE_PRIVATE_API:
+            continue
+        with _mqtt_cache_lock:
+            entry = _device_cache.get(SN_DELTA2, {})
+            updated_at = entry.get("updated_at", 0)
+        stale_for_min = (time.time() - updated_at) / 60 if updated_at else None
+        is_stale = stale_for_min is None or stale_for_min > WATCHDOG_STALE_MINUTES
+        try:
+            if is_stale and not _DATA_STALE_ALERTED:
+                minutos = f"{stale_for_min:.0f}" if stale_for_min is not None else "varios"
+                send_telegram(
+                    f"⚠️ No recibo datos de la Delta 2 hace {minutos} min. "
+                    "Puede ser un corte de conexión MQTT o que las credenciales vencieron."
+                )
+                _DATA_STALE_ALERTED = True
+                log.warning("Watchdog: datos viejos hace %s min, alertado", minutos)
+            elif not is_stale and _DATA_STALE_ALERTED:
+                send_telegram("✅ Volví a recibir datos de la Delta 2 con normalidad.")
+                _DATA_STALE_ALERTED = False
+                log.info("Watchdog: datos frescos de nuevo, alerta resuelta")
+        except Exception:
+            log.exception("Error en el watchdog de datos")
 
 
 def main() -> None:
@@ -672,6 +736,7 @@ def main() -> None:
     threading.Thread(target=poll_commands, daemon=True).start()
     threading.Thread(target=report_timer, daemon=True).start()
     threading.Thread(target=ac_check_timer, daemon=True).start()
+    threading.Thread(target=watchdog_timer, daemon=True).start()
     if USE_PRIVATE_API:
         threading.Thread(target=start_private_mqtt, daemon=True).start()
 
