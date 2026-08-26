@@ -374,7 +374,7 @@ def get_ac_watts(data: dict):
 def get_extra_battery_soc(data: dict):
     """La batería extra no es un dispositivo aparte: sus datos (bms_slave.*)
     vienen incluidos en la misma respuesta de la Delta 2."""
-    return _pick(data, "bms_slave.soc", "bms_slave.f32ShowSoc")
+    return _pick(data, "bms_slave.f32ShowSoc", "bms_slave.soc")
 
 
 def send_telegram(text: str, chat_id: str = None) -> None:
@@ -411,7 +411,7 @@ def _combined_line(soc_delta2, soc_extra) -> str:
     if soc_delta2 is None or soc_extra is None:
         return ""
     avg = round((soc_delta2 + soc_extra) / 2, 1)
-    return f"🔋 *Total combinado*: *{avg}%*"
+    return f"🔋 *Total combinado*: *{avg:.1f}%*"
 
 
 def build_report() -> str:
@@ -429,7 +429,7 @@ def build_report() -> str:
         log.exception("Error consultando la Delta 2")
         return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
 
-    soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
+    soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
     extra_in_w = _pick(data, "bms_slave.inputWatts")
     pv_w = get_pv_watts(data)
@@ -450,10 +450,11 @@ def build_report() -> str:
 
     lines = [f"📊 *Informe EcoFlow* · {status}{source_emoji}", ""]
 
-    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%*")
+    soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
+    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2_str}%*")
     if soc_extra is not None:
         lines.append(
-            f"🔋 Batería Extra — Carga: *{soc_extra}%* "
+            f"🔋 Batería Extra — Carga: *{soc_extra:.1f}%* "
             f"({extra_in_w if extra_in_w is not None else 0} W)"
         )
     combined = _combined_line(soc_delta2, soc_extra)
@@ -499,21 +500,22 @@ def build_quick_status() -> str:
     soc_extra = None
     try:
         data = get_device_quota(SN_DELTA2)
-        soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
+        soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
         pv_w = get_pv_watts(data)
         ac_w = get_ac_watts(data)
-        lines.append(f"🔋 Delta 2: {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
+        soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
+        lines.append(f"🔋 Delta 2: {soc_delta2_str}%")
         lines.append(f"☀️ Solar (panel): {pv_w if pv_w is not None else 'N/D'} W")
         lines.append(f"🔌 Corriente (AC): {ac_w if ac_w is not None else 0} W")
 
         soc_extra = get_extra_battery_soc(data)
         if soc_extra is not None:
-            lines.append(f"🔋 Extra: {soc_extra}%")
+            lines.append(f"🔋 Extra: {soc_extra:.1f}%")
     except Exception as exc:
         lines.append(f"🔋 Delta 2: ⚠️ {exc}")
 
     if soc_delta2 is not None and soc_extra is not None:
-        lines.append(f"🔷 Total: {round((soc_delta2 + soc_extra) / 2, 1)}%")
+        lines.append(f"🔷 Total: {round((soc_delta2 + soc_extra) / 2, 1):.1f}%")
 
     return "\n".join(lines)
 
