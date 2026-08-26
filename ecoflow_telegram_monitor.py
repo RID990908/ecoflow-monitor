@@ -308,18 +308,25 @@ def start_private_mqtt() -> None:
 
 def get_device_quota(sn: str) -> dict:
     if USE_PRIVATE_API:
+        # Los campos llegan en ráfaga, en mensajes separados por moduleType
+        # (no una sola foto atómica). En vez de devolver apenas llega el
+        # primer mensaje parcial, esperamos a que la ráfaga se calme (sin
+        # mensajes nuevos por QUIET_S) para juntar más campos consistentes
+        # entre sí, hasta un tope de MAX_WAIT_S.
+        QUIET_S = 1.5
+        MAX_WAIT_S = 6
         _request_quota_refresh(sn)
-        deadline = time.time() + 8
-        while time.time() < deadline:
+        start = time.time()
+        while time.time() - start < MAX_WAIT_S:
+            time.sleep(0.3)
             with _mqtt_cache_lock:
                 entry = _device_cache.get(sn)
-                if entry and entry.get("quota") and time.time() - entry.get("updated_at", 0) < 6:
+                if entry and entry.get("quota") and time.time() - entry.get("updated_at", 0) >= QUIET_S:
                     return entry["quota"]
-            time.sleep(0.3)
         with _mqtt_cache_lock:
             entry = _device_cache.get(sn)
             if entry and entry.get("quota"):
-                return entry["quota"]  # dato viejo, mejor que nada
+                return entry["quota"]  # lo que haya juntado hasta el tope, mejor que nada
         raise RuntimeError("Todavía no llegó ningún dato del dispositivo por MQTT")
 
     payload = _ecoflow_get("/iot-open/sign/device/quota/all", {"sn": sn})
