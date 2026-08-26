@@ -328,8 +328,15 @@ def get_device_quota(sn: str) -> dict:
 
 def get_device_online(sn: str) -> bool:
     if USE_PRIVATE_API:
+        # El campo "online" solo llega en la respuesta a un pedido explícito
+        # (get_reply), que a veces no alcanza a llegar antes de que
+        # get_device_quota ya haya devuelto datos del canal de push. Si
+        # recibimos datos frescos del dispositivo, ya sabemos que está online.
         with _mqtt_cache_lock:
-            return bool(_device_cache.get(sn, {}).get("online"))
+            entry = _device_cache.get(sn, {})
+            if entry.get("online"):
+                return True
+            return bool(entry.get("quota")) and (time.time() - entry.get("updated_at", 0) < 120)
 
     payload = _ecoflow_get("/iot-open/sign/device/list", {})
     for dev in payload.get("data", []):
@@ -357,10 +364,22 @@ def get_ac_watts(data: dict):
     return _pick(data, "inv.inputWatts")
 
 
+def _estimate_ac_watts(data: dict, pv_w):
+    """inv.inputWatts a veces no llega todavía por MQTT; si tenemos el total y
+    la solar, la AC es la diferencia (nunca negativa)."""
+    ac_w = get_ac_watts(data)
+    if ac_w is not None:
+        return ac_w
+    total_in_w = _pick(data, "pd.wattsInSum")
+    if total_in_w is not None and pv_w is not None:
+        return max(0, round(total_in_w - pv_w))
+    return None
+
+
 def format_delta2_report(data: dict, online: bool) -> str:
     soc = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     pv_w = get_pv_watts(data)
-    ac_w = get_ac_watts(data)
+    ac_w = _estimate_ac_watts(data, pv_w)
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
@@ -474,36 +493,36 @@ def build_report() -> str:
 
 
 def build_quick_status() -> str:
-    """Línea compacta y combinada: carga de ambas baterías + entrada solar/AC. Para /estado."""
+    """Resumen rápido, una línea por dato (no todo apretado en una sola línea). Para /estado."""
     if not ECOFLOW_READY:
         return "⏳ EcoFlow todavía no está configurado."
 
-    parts = []
+    lines = []
     soc_delta2 = None
     soc_extra = None
     try:
         data = get_device_quota(SN_DELTA2)
         soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
         pv_w = get_pv_watts(data)
-        ac_w = get_ac_watts(data)
-        parts.append(f"Delta 2 {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
-        parts.append(f"☀️ {pv_w if pv_w is not None else 'N/D'} W")
-        parts.append(f"🔌 {ac_w if ac_w is not None else 'N/D'} W")
+        ac_w = _estimate_ac_watts(data, pv_w)
+        lines.append(f"🔋 Delta 2: {soc_delta2 if soc_delta2 is not None else 'N/D'}%")
+        lines.append(f"☀️ Solar: {pv_w if pv_w is not None else 'N/D'} W")
+        lines.append(f"🔌 AC: {ac_w if ac_w is not None else 'N/D'} W")
     except Exception as exc:
-        parts.append(f"Delta 2 ⚠️ {exc}")
+        lines.append(f"🔋 Delta 2: ⚠️ {exc}")
 
     if SN_EXTRA:
         try:
             data = get_device_quota(SN_EXTRA)
             soc_extra = _pick(data, "bms_bmsStatus.soc", "bmsSlave.soc", "kit.soc")
-            parts.append(f"Extra {soc_extra if soc_extra is not None else 'N/D'}%")
+            lines.append(f"🔋 Extra: {soc_extra if soc_extra is not None else 'N/D'}%")
         except Exception as exc:
-            parts.append(f"Extra ⚠️ {exc}")
+            lines.append(f"🔋 Extra: ⚠️ {exc}")
 
     if soc_delta2 is not None and soc_extra is not None:
-        parts.append(f"Total {round((soc_delta2 + soc_extra) / 2, 1)}%")
+        lines.append(f"🔷 Total: {round((soc_delta2 + soc_extra) / 2, 1)}%")
 
-    return "🔋 " + " · ".join(parts)
+    return "\n".join(lines)
 
 
 HELP_TEXT = (
