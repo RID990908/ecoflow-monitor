@@ -454,17 +454,17 @@ def build_report() -> str:
     if soc_extra is not None:
         lines.append(
             f"🔋 Batería Extra — Carga: *{soc_extra}%* "
-            f"({extra_in_w if extra_in_w is not None else 0} W entrando)"
+            f"({extra_in_w if extra_in_w is not None else 0} W)"
         )
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
     lines.append("")
 
-    lines.append(f"Total entrada: {total_in_w} W")
+    lines.append(f"📥 Total entrada: {total_in_w} W")
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 0} W")
-    lines.append(f"⚡ Entrada desde batería: {battery_in_w} W")
+    lines.append(f"🪫 Entrada desde batería: {battery_in_w} W")
     lines.append(f"📤 Salida: {out_w} W")
 
     if remain_min:
