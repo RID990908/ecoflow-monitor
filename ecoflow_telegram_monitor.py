@@ -443,6 +443,7 @@ def build_report() -> str:
     # corriente real de la calle; un excedente chico es más probable que sea
     # transferencia entre baterías.
     AC_GAP_THRESHOLD_W = 500
+    NOISE_FLOOR_W = 10  # por debajo de esto es ruido de medición, no transferencia real
     ac_w = get_ac_watts(data)
     battery_in_w = 0
     if not ac_w:
@@ -451,7 +452,7 @@ def build_report() -> str:
             ac_w = round(gap)
         else:
             ac_w = 0
-            battery_in_w = max(0, round(gap))
+            battery_in_w = max(0, round(gap)) if gap > NOISE_FLOOR_W else 0
 
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
