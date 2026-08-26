@@ -431,10 +431,12 @@ def build_report() -> str:
 
     soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
+    extra_in_w = _pick(data, "bms_slave.inputWatts")
     pv_w = get_pv_watts(data)
     ac_w = get_ac_watts(data)  # dato real de inv.inputWatts, sin estimar (ver nota abajo)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
+    battery_in_w = max(0, round(total_in_w - (pv_w or 0)))
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
     # En el encabezado, qué fuente está cargando ahora mismo (si alguna)
@@ -450,24 +452,20 @@ def build_report() -> str:
 
     lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%*")
     if soc_extra is not None:
-        lines.append(f"🔋 Batería Extra — Carga: *{soc_extra}%*")
+        lines.append(
+            f"🔋 Batería Extra — Carga: *{soc_extra}%* "
+            f"({extra_in_w if extra_in_w is not None else 0} W entrando)"
+        )
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
     lines.append("")
 
+    lines.append(f"Total entrada: {total_in_w} W")
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 0} W")
+    lines.append(f"⚡ Entrada desde batería: {battery_in_w} W")
     lines.append(f"📤 Salida: {out_w} W")
-
-    # Los campos directos de carga/descarga de batería (bms_bmsStatus.*)
-    # están rotos (confirmado: se quedan pegados en 0 aunque el dispositivo
-    # esté claramente descargando). En su lugar, lo derivamos de entrada y
-    # salida totales, que sí son confiables: si sale más de lo que entra,
-    # la diferencia tiene que estar saliendo de la batería.
-    battery_net_w = total_in_w - out_w
-    if battery_net_w < -AC_WATTS_THRESHOLD:
-        lines.append(f"🔋 Descargando: {abs(round(battery_net_w))} W")
 
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
