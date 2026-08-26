@@ -237,33 +237,7 @@ def _mqtt_topics(sn: str) -> dict:
         "get": f"/app/{_mqtt_user_id}/{sn}/thing/property/get",
         "get_reply": f"/app/{_mqtt_user_id}/{sn}/thing/property/get_reply",
         "data": f"/app/device/property/{sn}",
-        "set": f"/app/{_mqtt_user_id}/{sn}/thing/property/set",
-        "set_reply": f"/app/{_mqtt_user_id}/{sn}/thing/property/set_reply",
     }
-
-
-def publish_set_command(sn: str, module_type: int, operate_type: str, params: dict) -> bool:
-    """Manda un comando de control (encender/apagar salidas) al dispositivo por MQTT.
-    El payload necesita los campos "from"/"id"/"version" que pone la app real
-    (sin ellos, el dispositivo ignora el mensaje en silencio - confirmado)."""
-    if _mqtt_client is None:
-        log.error("No se puede mandar comando: cliente MQTT no conectado")
-        return False
-    topic = _mqtt_topics(sn)["set"]
-    msg_id = str(999900000 + random.randint(10000, 99999))
-    payload = json.dumps(
-        {
-            "from": "Telegram-Bot",
-            "id": msg_id,
-            "version": "1.0",
-            "moduleType": module_type,
-            "operateType": operate_type,
-            "params": params,
-        }
-    )
-    _mqtt_client.publish(topic, payload)
-    log.info("Comando enviado (id=%s): %s %s", msg_id, operate_type, params)
-    return True
 
 
 def _private_login() -> tuple:
@@ -325,8 +299,6 @@ def _on_mqtt_message(client, userdata, msg):
                 if d.get("online") and "quotaMap" in d:
                     entry.setdefault("quota", {}).update(d["quotaMap"])
                 entry["updated_at"] = time.time()
-            elif msg.topic == topics["set_reply"]:
-                log.info("Respuesta a comando de control: %s", raw)
 
 
 def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
@@ -338,7 +310,6 @@ def _on_mqtt_connect(client, userdata, flags, rc, properties=None):
             topics = _mqtt_topics(sn)
             client.subscribe(topics["data"])
             client.subscribe(topics["get_reply"])
-            client.subscribe(topics["set_reply"])
             _request_quota_refresh(sn)
     else:
         log.error("Fallo de conexión MQTT privado, rc=%s", rc)
@@ -479,10 +450,6 @@ def set_bot_commands() -> None:
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
-        {"command": "encender_ca", "description": "Prender la salida de corriente (CA)"},
-        {"command": "apagar_ca", "description": "Apagar la salida de corriente (CA)"},
-        {"command": "encender_usb", "description": "Prender la salida USB"},
-        {"command": "apagar_usb", "description": "Apagar la salida USB"},
         {"command": "ping", "description": "Ver si el bot está activo"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
@@ -588,8 +555,6 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
-    "/encender_ca y /apagar_ca — prender/apagar la salida de corriente (CA)\n"
-    "/encender_usb y /apagar_usb — prender/apagar la salida USB\n"
     "/ping — ver si el bot está activo\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
@@ -623,27 +588,6 @@ def handle_command(text: str, chat_id: str) -> None:
             BATTERY_LOW_THRESHOLD = int(parts[1])
             _save_persisted_state()
             send_telegram(f"🔔 Te voy a avisar cuando la carga baje de {BATTERY_LOW_THRESHOLD}%.", chat_id=chat_id)
-    elif cmd in ("/encender_ca", "/apagar_ca"):
-        if not ECOFLOW_READY:
-            send_telegram("⏳ EcoFlow todavía no está configurado.", chat_id=chat_id)
-        else:
-            enabled = 1 if cmd == "/encender_ca" else 0
-            ok = publish_set_command(
-                SN_DELTA2, 5, "acOutCfg",
-                {"enabled": enabled, "out_voltage": -1, "out_freq": 255, "xboost": 255},
-            )
-            verbo = "Prendiendo" if enabled else "Apagando"
-            msg = f"🔌 {verbo} la salida de corriente (CA)..." if ok else "⚠️ No pude enviar el comando (MQTT no conectado)."
-            send_telegram(msg, chat_id=chat_id)
-    elif cmd in ("/encender_usb", "/apagar_usb"):
-        if not ECOFLOW_READY:
-            send_telegram("⏳ EcoFlow todavía no está configurado.", chat_id=chat_id)
-        else:
-            enabled = 1 if cmd == "/encender_usb" else 0
-            ok = publish_set_command(SN_DELTA2, 1, "dcOutCfg", {"enabled": enabled})
-            verbo = "Prendiendo" if enabled else "Apagando"
-            msg = f"🔌 {verbo} la salida USB..." if ok else "⚠️ No pude enviar el comando (MQTT no conectado)."
-            send_telegram(msg, chat_id=chat_id)
     elif cmd == "/ping":
         estado_ecoflow = "🟢 EcoFlow configurado" if ECOFLOW_READY else "⏳ EcoFlow sin configurar"
         send_telegram(
