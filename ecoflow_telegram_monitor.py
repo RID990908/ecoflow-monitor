@@ -456,6 +456,17 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
+def _battery_flow_suffix(net_w) -> str:
+    """🔌 si está cargando, 🪫 si se está descargando, nada si no hay flujo neto."""
+    if net_w is None:
+        return ""
+    if net_w > NOISE_FLOOR_W:
+        return f" 🔌 ({round(net_w)} W)"
+    if net_w < -NOISE_FLOOR_W:
+        return f" 🪫 ({abs(round(net_w))} W)"
+    return ""
+
+
 # Delta 2 y batería extra son de la misma capacidad, así que el promedio
 # simple de sus %SOC es válido: ambas pesan lo mismo en el total.
 def _combined_line(soc_delta2, soc_extra) -> str:
@@ -483,11 +494,19 @@ def build_report() -> str:
     soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
     extra_in_w = _pick(data, "bms_slave.inputWatts")
+    extra_out_w = _pick(data, "bms_slave.outputWatts")
     pv_w = get_pv_watts(data)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
     ac_w, battery_in_w = classify_ac_and_battery_watts(data, pv_w)
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
+
+    # bms_bmsStatus.inputWatts/outputWatts (campo directo de la Delta 2) está
+    # confirmado roto (pegado en 0); se deriva el neto de la contabilidad
+    # general del sistema en su lugar. Para la batería extra sí hay un campo
+    # de entrada confiable (bms_slave.inputWatts).
+    delta2_net_w = total_in_w - out_w
+    extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
 
     # En el encabezado, qué fuente está cargando ahora mismo (si alguna).
     # mppt.chgType == 2 confirmado empíricamente como "carga solar" en esta
@@ -509,12 +528,9 @@ def build_report() -> str:
     lines = [f"📊 *Informe EcoFlow* · {status}{source_emoji}", ""]
 
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
-    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2_str}%*")
+    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2_str}%*{_battery_flow_suffix(delta2_net_w)}")
     if soc_extra is not None:
-        lines.append(
-            f"🔋 Batería Extra — Carga: *{soc_extra:.1f}%* "
-            f"({extra_in_w if extra_in_w is not None else 0} W)"
-        )
+        lines.append(f"🔋 Batería Extra — Carga: *{soc_extra:.1f}%*{_battery_flow_suffix(extra_net_w)}")
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append(combined)
