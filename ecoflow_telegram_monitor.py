@@ -28,7 +28,10 @@ from datetime import datetime
 
 import requests
 
-API_HOST = "https://api.ecoflow.com"
+# EcoFlow tiene hosts regionales separados (api-e.ecoflow.com = Europa,
+# api-a.ecoflow.com = América); "api.ecoflow.com" no siempre acepta keys
+# generadas en el portal developer-eu. Default a EU, configurable si hace falta.
+API_HOST = os.environ.get("ECOFLOW_API_HOST", "https://api-e.ecoflow.com")
 
 logging.basicConfig(
     level=logging.INFO,
