@@ -376,48 +376,10 @@ def _estimate_ac_watts(data: dict, pv_w):
     return None
 
 
-def format_delta2_report(data: dict, online: bool) -> str:
-    soc = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
-    pv_w = get_pv_watts(data)
-    ac_w = _estimate_ac_watts(data, pv_w)
-    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
-    out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
-    remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
-    temp = _pick(data, "bms_bmsStatus.temp", "inv.outTemp")
-
-    lines = [f"🔋 *Delta 2* {'🟢 en línea' if online else '🔴 desconectada'}"]
-    if soc is not None:
-        lines.append(f"Carga: *{soc}%*")
-    lines.append(f"☀️ Solar (panel): *{pv_w if pv_w is not None else 'N/D'} W*")
-    lines.append(f"🔌 Corriente (AC): *{ac_w if ac_w is not None else 'N/D'} W*")
-    lines.append(f"⚡ Entrada total: {total_in_w} W · Salida: {out_w} W")
-    if remain_min:
-        hours, minutes = divmod(abs(int(remain_min)), 60)
-        verb = "para llenarse" if int(remain_min) > 0 and total_in_w > out_w else "de autonomía"
-        lines.append(f"⏱ ~{hours}h {minutes}m {verb}")
-    if temp is not None:
-        lines.append(f"🌡 Temperatura: {temp}°C")
-    return "\n".join(lines)
-
-
 def get_extra_battery_soc(data: dict):
     """La batería extra no es un dispositivo aparte: sus datos (bms_slave.*)
     vienen incluidos en la misma respuesta de la Delta 2."""
     return _pick(data, "bms_slave.soc", "bms_slave.f32ShowSoc")
-
-
-def format_extra_battery_report(data: dict) -> str:
-    soc = get_extra_battery_soc(data)
-    temp = _pick(data, "bms_slave.temp")
-    amp = _pick(data, "bms_slave.inputWatts")
-    lines = ["🔋 *Batería extra*"]
-    if soc is not None:
-        lines.append(f"Carga: *{soc}%*")
-    if temp is not None:
-        lines.append(f"🌡 Temperatura: {temp}°C")
-    if amp is not None:
-        lines.append(f"🔌 Entrada: {amp} W")
-    return "\n".join(lines)
 
 
 def send_telegram(text: str, chat_id: str = None) -> None:
@@ -463,36 +425,63 @@ def _combined_line(soc_delta2, soc_extra) -> str:
 
 def build_report() -> str:
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
-    sections = [f"📊 *Informe EcoFlow* — {now}"]
 
     if not ECOFLOW_READY:
-        sections.append(
+        return (
+            f"📊 *Informe EcoFlow* — {now}\n\n"
             "⏳ EcoFlow todavía no está configurado (esperando ACCESS_KEY/SECRET_KEY "
             "de developer.ecoflow.com). Avisá cuando estén listas."
         )
-        return "\n\n".join(sections)
-
-    soc_delta2 = None
-    soc_extra = None
 
     try:
         online = get_device_online(SN_DELTA2)
         data = get_device_quota(SN_DELTA2)
-        soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
-        sections.append(format_delta2_report(data, online))
-
-        soc_extra = get_extra_battery_soc(data)
-        if soc_extra is not None:
-            sections.append(format_extra_battery_report(data))
     except Exception as exc:
         log.exception("Error consultando la Delta 2")
-        sections.append(f"🔋 *Delta 2*\n⚠️ Error al consultar: {exc}")
+        return f"📊 *Informe EcoFlow* — {now}\n\n⚠️ Error al consultar la Delta 2: {exc}"
+
+    soc_delta2 = _pick(data, "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
+    soc_extra = get_extra_battery_soc(data)
+    pv_w = get_pv_watts(data)
+    ac_w = _estimate_ac_watts(data, pv_w)
+    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
+    out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
+    remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
+    temp = _pick(data, "bms_bmsStatus.temp", "inv.outTemp")
+
+    # En el encabezado, qué fuente está cargando ahora mismo (si alguna)
+    if (ac_w or 0) > AC_WATTS_THRESHOLD:
+        source_emoji = " 🔌"
+    elif (pv_w or 0) > AC_WATTS_THRESHOLD:
+        source_emoji = " ☀️"
+    else:
+        source_emoji = ""
+    status = "🟢 en línea" if online else "🔴 desconectada"
+
+    lines = [f"📊 *Informe EcoFlow* — {now} · {status}{source_emoji}", ""]
+
+    lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2 if soc_delta2 is not None else 'N/D'}%*")
+    if soc_extra is not None:
+        lines.append(f"🔋 Batería Extra — Carga: *{soc_extra}%*")
+    lines.append("")
+
+    lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
+    lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 'N/D'} W")
+    lines.append(f"⚡ Entrada total: {total_in_w} W")
+    lines.append(f"📤 Salida: {out_w} W")
+    if remain_min:
+        hours, minutes = divmod(abs(int(remain_min)), 60)
+        verb = "para llenarse" if int(remain_min) > 0 and total_in_w > out_w else "de autonomía"
+        lines.append(f"⏱ ~{hours}h {minutes}m {verb}")
+    if temp is not None:
+        lines.append(f"🌡 Temperatura: {temp}°C")
 
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
-        sections.append(combined)
+        lines.append("")
+        lines.append(combined)
 
-    return "\n\n".join(sections)
+    return "\n".join(lines)
 
 
 def build_quick_status() -> str:
