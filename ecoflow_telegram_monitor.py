@@ -456,10 +456,16 @@ def build_report() -> str:
 
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
-    # En el encabezado, qué fuente está cargando ahora mismo (si alguna)
+    # En el encabezado, qué fuente está cargando ahora mismo (si alguna).
+    # mppt.chgType == 2 confirmado empíricamente como "carga solar" en esta
+    # Delta 2 (el mapeo documentado para River 2 no aplica igual acá). Todavía
+    # no se pudo confirmar el valor real para corriente AC, así que ese caso
+    # sigue con el umbral de excedente (>500W).
+    chg_type = _pick(data, "mppt.chgType")
+    is_solar_active = chg_type == 2 or (pv_w or 0) > AC_WATTS_THRESHOLD
     if (ac_w or 0) > AC_WATTS_THRESHOLD:
         source_emoji = " 🔌"
-    elif (pv_w or 0) > AC_WATTS_THRESHOLD:
+    elif is_solar_active:
         source_emoji = " ☀️"
     else:
         source_emoji = ""
