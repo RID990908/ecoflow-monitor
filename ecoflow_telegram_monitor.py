@@ -433,10 +433,26 @@ def build_report() -> str:
     soc_extra = get_extra_battery_soc(data)
     extra_in_w = _pick(data, "bms_slave.inputWatts")
     pv_w = get_pv_watts(data)
-    ac_w = get_ac_watts(data)  # dato real de inv.inputWatts, sin estimar (ver nota abajo)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
-    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0) + (ac_w or 0))
-    battery_in_w = max(0, round(total_in_w - (pv_w or 0)))
+    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
+
+    # inv.inputWatts (dato real de corriente AC) suele venir ausente incluso
+    # cargando por AC. Como la transferencia hacia la batería extra ronda los
+    # 30-65W (mucho menor a lo que carga un cargador de pared), un excedente
+    # grande entre el total y la solar (>500W) es mucho más probable que sea
+    # corriente real de la calle; un excedente chico es más probable que sea
+    # transferencia entre baterías.
+    AC_GAP_THRESHOLD_W = 500
+    ac_w = get_ac_watts(data)
+    battery_in_w = 0
+    if not ac_w:
+        gap = total_in_w - (pv_w or 0)
+        if gap > AC_GAP_THRESHOLD_W:
+            ac_w = round(gap)
+        else:
+            ac_w = 0
+            battery_in_w = max(0, round(gap))
+
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
     # En el encabezado, qué fuente está cargando ahora mismo (si alguna)
@@ -464,7 +480,7 @@ def build_report() -> str:
 
     lines.append(f"📥 Total entrada: {total_in_w} W")
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
-    lines.append(f"🔌 Entrada por corriente: {ac_w if ac_w is not None else 0} W")
+    lines.append(f"🔌 Entrada por corriente: {ac_w} W")
     lines.append(f"🪫 Entrada desde batería: {battery_in_w} W")
     lines.append(f"📤 Salida: {out_w} W")
 
