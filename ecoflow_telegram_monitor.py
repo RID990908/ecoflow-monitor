@@ -485,7 +485,6 @@ def build_report() -> str:
         )
 
     try:
-        online = get_device_online(SN_DELTA2)
         data = get_device_quota(SN_DELTA2)
     except Exception as exc:
         log.exception("Error consultando la Delta 2")
@@ -498,7 +497,6 @@ def build_report() -> str:
     pv_w = get_pv_watts(data)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
-    ac_w, battery_in_w = classify_ac_and_battery_watts(data, pv_w)
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
     # bms_bmsStatus.inputWatts/outputWatts (campo directo de la Delta 2) está
@@ -508,24 +506,14 @@ def build_report() -> str:
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
 
-    # En el encabezado, qué fuente está cargando ahora mismo (si alguna).
-    # mppt.chgType == 2 confirmado empíricamente como "carga solar" en esta
-    # Delta 2 (el mapeo documentado para River 2 no aplica igual acá). Todavía
-    # no se pudo confirmar el valor real para corriente AC, así que ese caso
-    # sigue con el umbral de excedente (>500W).
-    chg_type = _pick(data, "mppt.chgType")
-    is_solar_active = chg_type == 2 or (pv_w or 0) > AC_WATTS_THRESHOLD
-    if (ac_w or 0) > AC_WATTS_THRESHOLD:
-        source_emoji = " 🔌"
-    elif is_solar_active:
-        source_emoji = " ☀️"
-    elif battery_in_w > 0 or out_w > 0:
-        source_emoji = " 🔋"  # sin solar ni AC: corriendo (o transfiriendo) a batería
-    else:
-        source_emoji = ""
-    status = "🟢 en línea" if online else "🔴 desconectada"
+    # Encabezado: 🟢 cargando / 🔴 descargando (en vez de online/offline — si
+    # llegamos hasta acá sin excepción, el dispositivo ya está respondiendo).
+    # El 🔌 solo aparece cuando efectivamente está cargando.
+    is_charging_now = delta2_net_w > NOISE_FLOOR_W
+    status = "🟢" if is_charging_now else "🔴"
+    plug_emoji = " 🔌" if is_charging_now else ""
 
-    lines = [f"📊 *Informe EcoFlow* · {status}{source_emoji}", ""]
+    lines = [f"📊 *Informe EcoFlow* · {status}{plug_emoji}", ""]
 
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
     lines.append(f"🔋 Delta 2 — Carga: *{soc_delta2_str}%*{_battery_flow_suffix(delta2_net_w)}")
@@ -536,10 +524,7 @@ def build_report() -> str:
         lines.append(combined)
     lines.append("")
 
-    lines.append(f"📥 Total entrada: {total_in_w} W")
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
-    lines.append(f"🔌 Entrada por corriente: {ac_w} W")
-    lines.append(f"🪫 Entrada desde batería: {battery_in_w} W")
     lines.append(f"📤 Salida: {out_w} W")
 
     if remain_min:
