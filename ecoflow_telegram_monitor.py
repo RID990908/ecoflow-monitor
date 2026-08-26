@@ -28,10 +28,10 @@ from datetime import datetime
 
 import requests
 
-# EcoFlow tiene hosts regionales separados (api-e.ecoflow.com = Europa,
-# api-a.ecoflow.com = América); "api.ecoflow.com" no siempre acepta keys
-# generadas en el portal developer-eu. Default a EU, configurable si hace falta.
-API_HOST = os.environ.get("ECOFLOW_API_HOST", "https://api-e.ecoflow.com")
+# El "accessKey is invalid" que aparecía al principio no era un problema de
+# región: era que la key recién generada tarda unos minutos en activarse en
+# EcoFlow. api.ecoflow.com funciona bien. Queda configurable por las dudas.
+API_HOST = os.environ.get("ECOFLOW_API_HOST", "https://api.ecoflow.com")
 
 logging.basicConfig(
     level=logging.INFO,
