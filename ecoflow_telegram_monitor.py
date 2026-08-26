@@ -472,7 +472,7 @@ def _battery_flow_emoji(net_w) -> tuple:
     if net_w is None or -NOISE_FLOOR_W <= net_w <= NOISE_FLOOR_W:
         return "🔋", "Carga", ""
     if net_w > NOISE_FLOOR_W:
-        return "🔋", "Carga", f" 🔌 ({round(net_w)} W)"
+        return "🔋", "Carga", f" ({round(net_w)} W)"
     return "🪫", "Descarga", f" ({abs(round(net_w))} W)"
 
 
