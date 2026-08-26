@@ -476,6 +476,30 @@ def build_report() -> str:
     if temp is not None:
         lines.append(f"🌡 Temperatura: {temp}°C")
 
+    vol_mv = _pick(data, "bms_bmsStatus.vol")
+    cycles = _pick(data, "bms_bmsStatus.cycles")
+    soh = _pick(data, "bms_bmsStatus.soh")
+    if vol_mv is not None:
+        lines.append(f"🔋 Voltaje: {round(vol_mv / 1000, 1)} V")
+    if cycles is not None:
+        lines.append(f"🔁 Ciclos de carga: {cycles}")
+    if soh is not None:
+        lines.append(f"💚 Salud de la batería: {soh}%")
+
+    ports = [
+        ("USB-C 1", _pick(data, "pd.typec1Watts")),
+        ("USB-C 2", _pick(data, "pd.typec2Watts")),
+        ("USB 1", _pick(data, "pd.usb1Watts")),
+        ("USB 2", _pick(data, "pd.usb2Watts")),
+        ("Auto (12V)", _pick(data, "pd.carWatts")),
+    ]
+    active_ports = [(name, w) for name, w in ports if w]
+    if active_ports:
+        lines.append("")
+        lines.append("🔌 *Puertos activos:*")
+        for name, w in active_ports:
+            lines.append(f"  {name}: {w} W")
+
     combined = _combined_line(soc_delta2, soc_extra)
     if combined:
         lines.append("")
