@@ -456,6 +456,16 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
+def _charge_source(pv_w, ac_w) -> tuple:
+    """(emoji, etiqueta) de qué está cargando la Delta 2 en este momento:
+    corriente de la calle > solar > nada (corriendo de batería)."""
+    if ac_w and ac_w > NOISE_FLOOR_W:
+        return "🔌", "Corriente"
+    if pv_w and pv_w > NOISE_FLOOR_W:
+        return "☀️", "Solar"
+    return "🔋", "Batería"
+
+
 def _battery_flow_emoji(net_w) -> tuple:
     """(emoji_batería, sufijo_texto) según el neto: 🟢 + 🔌 si carga,
     🔴 si descarga (sin conector, el color ya lo dice), 🔋 si no hay flujo."""
@@ -505,10 +515,12 @@ def build_report() -> str:
     # de entrada confiable (bms_slave.inputWatts).
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
+    ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
 
     status = "🟢 en línea" if online else "🔴 desconectada"
+    source_emoji, source_label = _charge_source(pv_w, ac_w)
 
-    lines = [f"📊 *Informe EcoFlow* · {status}", ""]
+    lines = [f"📊 *Informe EcoFlow* · {status} · {source_emoji} {source_label}", ""]
 
     delta2_emoji, delta2_suffix = _battery_flow_emoji(delta2_net_w)
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
@@ -521,6 +533,7 @@ def build_report() -> str:
         lines.append(combined)
     lines.append("")
 
+    lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(ac_w) + ' W)' if ac_w > NOISE_FLOOR_W else 'No'}")
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"📤 Salida: {out_w} W")
 
