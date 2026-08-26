@@ -371,6 +371,27 @@ def get_ac_watts(data: dict):
     return _pick(data, "inv.inputWatts")
 
 
+AC_GAP_THRESHOLD_W = 500
+NOISE_FLOOR_W = 10  # por debajo de esto es ruido de medición, no transferencia real
+
+
+def classify_ac_and_battery_watts(data: dict, pv_w) -> tuple:
+    """inv.inputWatts (dato real de corriente AC) suele venir ausente incluso
+    cargando por AC. Como la transferencia hacia la batería extra ronda los
+    30-65W (mucho menor a lo que carga un cargador de pared), un excedente
+    grande entre el total y la solar (>500W) es mucho más probable que sea
+    corriente real de la calle; un excedente chico es más probable que sea
+    transferencia entre baterías. Devuelve (ac_w, battery_in_w)."""
+    ac_w = get_ac_watts(data)
+    if ac_w:
+        return ac_w, 0
+    total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
+    gap = total_in_w - (pv_w or 0)
+    if gap > AC_GAP_THRESHOLD_W:
+        return round(gap), 0
+    return 0, (max(0, round(gap)) if gap > NOISE_FLOOR_W else 0)
+
+
 def get_extra_battery_soc(data: dict):
     """La batería extra no es un dispositivo aparte: sus datos (bms_slave.*)
     vienen incluidos en la misma respuesta de la Delta 2."""
@@ -435,25 +456,7 @@ def build_report() -> str:
     pv_w = get_pv_watts(data)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
-
-    # inv.inputWatts (dato real de corriente AC) suele venir ausente incluso
-    # cargando por AC. Como la transferencia hacia la batería extra ronda los
-    # 30-65W (mucho menor a lo que carga un cargador de pared), un excedente
-    # grande entre el total y la solar (>500W) es mucho más probable que sea
-    # corriente real de la calle; un excedente chico es más probable que sea
-    # transferencia entre baterías.
-    AC_GAP_THRESHOLD_W = 500
-    NOISE_FLOOR_W = 10  # por debajo de esto es ruido de medición, no transferencia real
-    ac_w = get_ac_watts(data)
-    battery_in_w = 0
-    if not ac_w:
-        gap = total_in_w - (pv_w or 0)
-        if gap > AC_GAP_THRESHOLD_W:
-            ac_w = round(gap)
-        else:
-            ac_w = 0
-            battery_in_w = max(0, round(gap)) if gap > NOISE_FLOOR_W else 0
-
+    ac_w, battery_in_w = classify_ac_and_battery_watts(data, pv_w)
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
     # En el encabezado, qué fuente está cargando ahora mismo (si alguna).
@@ -649,8 +652,9 @@ def ac_check_timer() -> None:
             continue
         try:
             data = get_device_quota(SN_DELTA2)
-            ac_w = get_ac_watts(data)
-            is_charging = bool(ac_w and ac_w > AC_WATTS_THRESHOLD)
+            pv_w = get_pv_watts(data)
+            ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
+            is_charging = ac_w > AC_WATTS_THRESHOLD
             if is_charging and not WAS_CHARGING_AC:
                 send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
                 log.info("Notificado inicio de carga AC (%s W)", ac_w)
