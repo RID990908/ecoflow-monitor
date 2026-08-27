@@ -1088,7 +1088,7 @@ def get_dashboard_status() -> dict:
         "eta_text": eta_text,
         "eta_ok": eta_ok,
         "remain_duration": remain_duration,
-        "threshold_text": m["threshold_line"] or None,
+        "threshold_text": m["threshold_line"].replace("🪫 ", "") if m["threshold_line"] else None,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         "ports": m["ports"],
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
