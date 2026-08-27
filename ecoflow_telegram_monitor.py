@@ -21,6 +21,7 @@ Uso:
 """
 
 import base64
+import collections
 import hashlib
 import hmac
 import http.server
@@ -144,6 +145,11 @@ _daily_solar_wh = 0.0
 _daily_consumed_wh = 0.0
 _daily_lock = threading.Lock()
 _daily_summary_sent_date = None
+
+# Historial para el gráfico del dashboard: una muestra cada AC_CHECK_MINUTES
+# (por default 5 min), hasta 24h. En memoria, se pierde en cada redeploy.
+_history = collections.deque(maxlen=288)
+_history_lock = threading.Lock()
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
@@ -932,6 +938,11 @@ def ac_check_timer() -> None:
             state_changed = is_charging != WAS_CHARGING_AC
             WAS_CHARGING_AC = is_charging
 
+            extra_soc_hist = get_extra_battery_soc(data)
+            avg_soc_hist = round((soc + extra_soc_hist) / 2, 1) if soc is not None and extra_soc_hist is not None else soc
+            with _history_lock:
+                _history.append({"t": time.time(), "pct": avg_soc_hist, "pv_w": pv_w or 0})
+
             if soc is not None:
                 is_below = soc < BATTERY_LOW_THRESHOLD
                 if is_below and not WAS_BELOW_LOW_THRESHOLD:
@@ -1027,6 +1038,15 @@ def daily_summary_timer() -> None:
 
 # --- Dashboard web: la misma info que el bot, en vivo, sin tener que pedirla ---
 PORT = int(os.environ.get("PORT", "8080"))
+
+
+def get_dashboard_history() -> list:
+    with _history_lock:
+        samples = list(_history)
+    return [
+        {"t": datetime.fromtimestamp(s["t"], TZ).strftime("%H:%M"), "pct": s["pct"], "pv_w": s["pv_w"]}
+        for s in samples
+    ]
 
 
 def get_dashboard_status() -> dict:
@@ -1144,6 +1164,16 @@ DASHBOARD_HTML = """<!doctype html>
   .battery-row .val.discharging { color: #f87171; }
   .ports { width: 100%; max-width: 380px; margin-top: 14px; }
   .ports .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
+  .chart-wrap { width: 100%; max-width: 380px; margin-top: 16px; }
+  .chart-wrap .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
+  .chart-wrap svg { width: 100%; height: 90px; background: #141b22; border-radius: 14px; }
+  .notif-btn {
+    margin-top: 16px; width: 100%; max-width: 380px; padding: 12px; border-radius: 12px;
+    border: none; background: #141b22; color: #cbd5e1; font-size: 14px;
+    transition: background-color 200ms var(--ease-out), transform 160ms var(--ease-out);
+  }
+  .notif-btn:active { transform: scale(0.97); }
+  .notif-btn.enabled { background: #14351f; color: #4ade80; }
   .port-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
   .port-row span:last-child { font-variant-numeric: tabular-nums; }
   .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
@@ -1198,10 +1228,19 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 
   <div class="batteries" id="batteries"></div>
+
+  <div class="chart-wrap" id="chart-wrap" style="display:none">
+    <div class="title">Últimas 24h — % de carga</div>
+    <svg id="chart" viewBox="0 0 340 90" preserveAspectRatio="none"></svg>
+  </div>
+
   <div class="ports" id="ports-wrap" style="display:none">
     <div class="title">Puertos activos</div>
     <div id="ports"></div>
   </div>
+
+  <button class="notif-btn" id="notif-btn" style="display:none">🔔 Activar avisos en esta pantalla</button>
+
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
@@ -1300,14 +1339,101 @@ DASHBOARD_HTML = """<!doctype html>
         }
 
         document.getElementById('live-dot').classList.remove('stale');
-        document.getElementById('updated-text').textContent = 'Actualizado ' + d.updated_at;
+        lastSuccessAt = Date.now();
+        maybeNotify(d);
       } catch (e) {
         document.getElementById('live-dot').classList.add('stale');
-        document.getElementById('updated-text').textContent = 'Sin conexión, reintentando…';
       }
     }
+
+    // Contador de "desactualizado hace Xm" que sigue corriendo aunque el
+    // fetch falle (no depende de que el servidor responda para contar).
+    let lastSuccessAt = null;
+    function tickClock() {
+      const updatedText = document.getElementById('updated-text');
+      if (lastSuccessAt == null) {
+        updatedText.textContent = 'Conectando…';
+        return;
+      }
+      const secs = Math.round((Date.now() - lastSuccessAt) / 1000);
+      if (secs < 3) {
+        updatedText.textContent = 'Actualizado ahora';
+      } else if (secs < 60) {
+        updatedText.textContent = `Actualizado hace ${secs}s`;
+      } else {
+        updatedText.textContent = `Desactualizado hace ${Math.round(secs / 60)}m`;
+      }
+    }
+
+    // Avisos en pantalla (mientras esta pestaña esté abierta) cuando cruza el
+    // 20% o cuando llega/se va la corriente. No es push real: si cerrás la
+    // página no llega nada — para eso ya está Telegram.
+    let notifsEnabled = false;
+    let prevHasAc = null;
+    let prevBelowThreshold = null;
+    function maybeNotify(d) {
+      if (!notifsEnabled || d.percent == null) return;
+      const belowThreshold = d.percent <= 20;
+      if (prevBelowThreshold === false && belowThreshold) {
+        new Notification('🪫 Batería baja', { body: `Carga en ${d.percent.toFixed(1)}%` });
+      }
+      if (prevHasAc === false && d.has_ac) {
+        new Notification('⚡ Llegó la corriente', { body: `${d.ac_w} W` });
+      } else if (prevHasAc === true && !d.has_ac) {
+        new Notification('🔌⚠️ Se fue la luz', { body: 'Dejó de cargar por AC' });
+      }
+      prevHasAc = d.has_ac;
+      prevBelowThreshold = belowThreshold;
+    }
+
+    const notifBtn = document.getElementById('notif-btn');
+    if ('Notification' in window) {
+      notifBtn.style.display = 'block';
+      if (Notification.permission === 'granted') {
+        notifsEnabled = true;
+        notifBtn.textContent = '🔔 Avisos activados en esta pantalla';
+        notifBtn.classList.add('enabled');
+      }
+      notifBtn.addEventListener('click', async () => {
+        const perm = await Notification.requestPermission();
+        if (perm === 'granted') {
+          notifsEnabled = true;
+          notifBtn.textContent = '🔔 Avisos activados en esta pantalla';
+          notifBtn.classList.add('enabled');
+        }
+      });
+    }
+
+    async function refreshHistory() {
+      try {
+        const res = await fetch('/api/history');
+        const hist = await res.json();
+        const chartWrap = document.getElementById('chart-wrap');
+        if (!hist || hist.length < 2) {
+          chartWrap.style.display = 'none';
+          return;
+        }
+        chartWrap.style.display = 'block';
+        const pts = hist.filter(h => h.pct != null);
+        if (pts.length < 2) { chartWrap.style.display = 'none'; return; }
+        const minPct = Math.min(...pts.map(p => p.pct), 0);
+        const maxPct = Math.max(...pts.map(p => p.pct), 100);
+        const w = 340, h = 90, pad = 6;
+        const xStep = (w - pad * 2) / (pts.length - 1);
+        const yFor = pct => h - pad - ((pct - minPct) / (maxPct - minPct || 1)) * (h - pad * 2);
+        const path = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${(pad + i * xStep).toFixed(1)} ${yFor(p.pct).toFixed(1)}`).join(' ');
+        document.getElementById('chart').innerHTML =
+          `<path d="${path}" fill="none" stroke="#4ade80" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />`;
+      } catch (e) {
+        // sin datos de historial todavía, no es grave
+      }
+    }
+
     refresh();
+    refreshHistory();
     setInterval(refresh, 1000);
+    setInterval(tickClock, 1000);
+    setInterval(refreshHistory, 60000);
   </script>
 </body>
 </html>
@@ -1339,6 +1465,9 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             except Exception as exc:
                 payload = json.dumps({"ready": False, "error": str(exc)}).encode("utf-8")
                 self._send(500, payload, "application/json")
+        elif self.path == "/api/history":
+            payload = json.dumps(get_dashboard_history()).encode("utf-8")
+            self._send(200, payload, "application/json")
         else:
             self._send(404, b"not found", "text/plain")
 
