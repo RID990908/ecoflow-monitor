@@ -174,6 +174,12 @@ def _flatten(obj, prefix=""):
 
 
 def _signed_headers(params: dict) -> dict:
+    # Sin Content-Type: application/json a propósito. La doc oficial dice que
+    # con ese header el servidor busca los datos a firmar en el body; nuestros
+    # GET mandan los datos por query string, así que con ese header puesto la
+    # firma no coincide del lado del servidor (confirmado: rompía quota/all,
+    # que sí lleva parámetros, pero no rompía device/list, que no lleva
+    # ninguno — por eso pasaba desapercibido).
     nonce = str(random.randint(100000, 999999))
     timestamp = str(int(time.time() * 1000))
     flat = _flatten(params) if params else {}
@@ -186,7 +192,6 @@ def _signed_headers(params: dict) -> dict:
         "nonce": nonce,
         "timestamp": timestamp,
         "sign": signature,
-        "Content-Type": "application/json;charset=UTF-8",
     }
 
 
