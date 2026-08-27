@@ -639,14 +639,25 @@ def _gather_metrics(passive: bool = False) -> dict:
     avg_soc = round((soc_delta2 + soc_extra) / 2, 1) if soc_delta2 is not None and soc_extra is not None else None
 
     remain = None
-    if remain_min:
+    is_stable = abs(total_in_w - out_w) <= NOISE_FLOOR_W
+    if is_stable:
+        remain = {"stable": True}
+    elif remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
-        # El signo de pd.remainTime ya indica la dirección (confirmado en la
-        # doc oficial: >0 tiempo para cargar completo, <0 tiempo para
-        # descargar completo) — no hace falta comparar watts aparte.
-        charging_up = int(remain_min) > 0
+        # La doc oficial dice que el signo de pd.remainTime basta para saber
+        # la dirección, pero en este equipo se confirmó que el campo se queda
+        # pegado en un valor viejo mientras el wattage real sigue cambiando
+        # (mismo patrón que bms_bmsStatus.inputWatts, que también está roto
+        # acá). Volvemos a comparar entrada vs salida, que sí es confiable.
+        charging_up = total_in_w > out_w
         eta = datetime.now(TZ) + timedelta(minutes=abs(int(remain_min)))
-        remain = {"hours": hours, "minutes": minutes, "charging_up": charging_up, "eta": eta.strftime("%H:%M")}
+        remain = {
+            "stable": False,
+            "hours": hours,
+            "minutes": minutes,
+            "charging_up": charging_up,
+            "eta": eta.strftime("%H:%M"),
+        }
 
     if soc_extra is not None:
         threshold_line = _time_to_threshold_line(avg_soc, system_net_w, 2, 20)
@@ -661,6 +672,16 @@ def _gather_metrics(passive: bool = False) -> dict:
         ("Auto (12V)", _pick(data, "pd.carWatts")),
     ]
     active_ports = [{"name": name, "watts": w} for name, w in ports if w]
+
+    # Solo lectura, no control: límites y preferencias ya configurados en el
+    # equipo (desde la app oficial), útiles para entender por qué se
+    # comporta de cierta manera. Campos confirmados en la doc oficial.
+    config_info = {
+        "backup_reserve_soc": _pick(data, "pd.bpPowerSoc"),
+        "min_discharge_soc": _pick(data, "bms_emsStatus.minDsgSoc"),
+        "max_charge_soc": _pick(data, "bms_emsStatus.maxChargeSoc"),
+        "solar_priority": _pick(data, "pd.pvChgPrioSet"),
+    }
 
     return {
         "soc_delta2": soc_delta2,
@@ -679,6 +700,7 @@ def _gather_metrics(passive: bool = False) -> dict:
         "remain": remain,
         "threshold_line": threshold_line,
         "ports": active_ports,
+        "config_info": config_info,
     }
 
 
@@ -716,7 +738,9 @@ def build_report() -> str:
     lines.append(f"📥 Entrada total: {m['total_in_w']} W")
     lines.append(f"☀️ Entrada solar: {m['pv_w'] if m['pv_w'] is not None else 'N/D'} W")
     lines.append(f"📤 Salida: {m['out_w']} W")
-    if m["remain"]:
+    if m["remain"] and m["remain"]["stable"]:
+        lines.append("⚖️ Estable: entra casi lo mismo que sale, ni carga ni descarga neta")
+    elif m["remain"]:
         r = m["remain"]
         verb = "para llenarse" if r["charging_up"] else "de autonomía"
         eta_verb = "vas a estar full a las" if r["charging_up"] else "dura hasta las"
@@ -735,6 +759,22 @@ def build_report() -> str:
     # 4. Corriente
     lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(m['ac_w']) + ' W)' if m['has_ac'] else 'No'}")
     lines.append(_last_ac_line())
+
+    # 5. Configuración (solo lectura: límites y preferencias ya puestos desde la app)
+    ci = m["config_info"]
+    config_lines = []
+    if ci["backup_reserve_soc"] is not None:
+        config_lines.append(f"  Reserva de batería: {ci['backup_reserve_soc']}%")
+    if ci["min_discharge_soc"] is not None:
+        config_lines.append(f"  Límite mínimo de descarga: {ci['min_discharge_soc']}%")
+    if ci["max_charge_soc"] is not None:
+        config_lines.append(f"  Límite máximo de carga: {ci['max_charge_soc']}%")
+    if ci["solar_priority"] is not None:
+        config_lines.append(f"  Prioridad de carga solar: {'Sí' if ci['solar_priority'] else 'No'}")
+    if config_lines:
+        lines.append("")
+        lines.append("⚙️ *Configuración*")
+        lines.extend(config_lines)
 
     return "\n".join(lines)
 
@@ -1079,7 +1119,11 @@ def get_dashboard_status() -> dict:
 
     eta_text = None
     remain_duration = None
-    if m["remain"]:
+    is_stable = bool(m["remain"] and m["remain"]["stable"])
+    if is_stable:
+        eta_text = "Estable"
+        remain_duration = "—"
+    elif m["remain"]:
         r = m["remain"]
         eta_text = f"Full a las {r['eta']}" if r["charging_up"] else f"Dura hasta las {r['eta']}"
         remain_duration = f"{r['hours']}h {r['minutes']}m"
@@ -1103,6 +1147,7 @@ def get_dashboard_status() -> dict:
         "threshold_text": m["threshold_line"] or None,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         "ports": m["ports"],
+        "config_info": m["config_info"],
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
     }
 
@@ -1170,6 +1215,7 @@ DASHBOARD_HTML = """<!doctype html>
   .eta-box .eta-main { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .eta-main.eta-ok { color: #4ade80; }
   .eta-main.eta-warn { color: #f87171; }
+  .eta-main.eta-neutral { color: #9aa4af; }
   .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; }
   .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
   .battery-row {
@@ -1250,6 +1296,11 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="ports"></div>
   </div>
 
+  <div class="ports" id="config-wrap" style="display:none">
+    <div class="title">Configuración</div>
+    <div id="config"></div>
+  </div>
+
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
@@ -1278,7 +1329,8 @@ DASHBOARD_HTML = """<!doctype html>
           etaBox.classList.add('visible');
           const etaMain = document.getElementById('eta-main');
           etaMain.textContent = d.eta_text;
-          etaMain.className = 'eta-main ' + (d.eta_text.startsWith('Full') ? 'eta-ok' : 'eta-warn');
+          const etaCls = d.eta_text.startsWith('Full') ? 'eta-ok' : d.eta_text === 'Estable' ? 'eta-neutral' : 'eta-warn';
+          etaMain.className = 'eta-main ' + etaCls;
           document.getElementById('eta-sub').textContent = d.threshold_text || d.last_ac_text || '';
         } else {
           etaBox.classList.remove('visible');
@@ -1296,15 +1348,17 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
 
-        // Batería extra: verde/🔋 si carga (neto >= 0), rojo/🪫 si descarga hacia la Delta 2 (mismo criterio que el bot)
+        // Batería extra: verde/🔋 si carga, rojo/🪫 si descarga hacia la Delta 2,
+        // gris/🔋 si está estable (ni carga ni descarga neta) — mismo criterio que el bot
         const extraCircle = document.getElementById('extra-circle');
         const extraDir = document.getElementById('extra-dir');
         const extraNet = d.extra_net_w;
-        if (extraNet == null) {
-          document.getElementById('extra-w').textContent = '-- W';
+        if (extraNet == null || (extraNet > -5 && extraNet < 5)) {
+          document.getElementById('extra-w').textContent = (extraNet == null ? '--' : '0') + ' W';
           extraCircle.textContent = '🔋';
           extraCircle.className = 'icon-circle';
-          extraDir.textContent = '';
+          extraDir.textContent = extraNet == null ? '' : '≈ estable';
+          extraDir.className = 'icon-dir';
         } else if (extraNet < -5) {
           document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
           extraCircle.textContent = '🪫';
@@ -1315,7 +1369,7 @@ DASHBOARD_HTML = """<!doctype html>
           document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
           extraCircle.textContent = '🔋';
           extraCircle.className = 'icon-circle charging';
-          extraDir.textContent = extraNet > 5 ? '↑ carga' : '';
+          extraDir.textContent = '↑ carga';
           extraDir.className = 'icon-dir charging';
         }
 
@@ -1345,6 +1399,22 @@ DASHBOARD_HTML = """<!doctype html>
           ).join('');
         } else {
           portsWrap.style.display = 'none';
+        }
+
+        const ci = d.config_info || {};
+        const configLines = [];
+        if (ci.backup_reserve_soc != null) configLines.push(['Reserva de batería', ci.backup_reserve_soc + '%']);
+        if (ci.min_discharge_soc != null) configLines.push(['Límite mínimo de descarga', ci.min_discharge_soc + '%']);
+        if (ci.max_charge_soc != null) configLines.push(['Límite máximo de carga', ci.max_charge_soc + '%']);
+        if (ci.solar_priority != null) configLines.push(['Prioridad de carga solar', ci.solar_priority ? 'Sí' : 'No']);
+        const configWrap = document.getElementById('config-wrap');
+        if (configLines.length) {
+          configWrap.style.display = 'block';
+          document.getElementById('config').innerHTML = configLines.map(
+            ([label, val]) => `<div class="port-row"><span>${label}</span><span>${val}</span></div>`
+          ).join('');
+        } else {
+          configWrap.style.display = 'none';
         }
 
         document.getElementById('live-dot').classList.remove('stale');
