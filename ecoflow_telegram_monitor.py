@@ -1030,9 +1030,6 @@ def get_dashboard_status() -> dict:
         eta_text = f"Full a las {r['eta']}" if r["charging_up"] else f"Dura hasta las {r['eta']}"
         remain_duration = f"{r['hours']}h {r['minutes']}m"
 
-    extra_in_w = m["extra_net_w"] if m["extra_net_w"] and m["extra_net_w"] > 0 else 0
-    extra_out_w = -m["extra_net_w"] if m["extra_net_w"] and m["extra_net_w"] < 0 else 0
-
     return {
         "ready": True,
         "percent": percent,
@@ -1042,8 +1039,7 @@ def get_dashboard_status() -> dict:
         "source_emoji": m["source_emoji"],
         "pv_w": m["pv_w"] or 0,
         "ac_w": m["ac_w"] or 0,
-        "extra_in_w": round(extra_in_w),
-        "extra_out_w": round(extra_out_w),
+        "extra_net_w": round(m["extra_net_w"]) if m["extra_net_w"] is not None else None,
         "has_ac": m["has_ac"],
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],
@@ -1069,25 +1065,31 @@ DASHBOARD_HTML = """<!doctype html>
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     display: flex; flex-direction: column; align-items: center; padding: 20px 16px 50px;
   }
-  .header {
-    width: 100%; max-width: 380px; display: flex; justify-content: space-between;
-    align-items: center; font-size: 15px; color: #cbd5e1; margin-bottom: 22px;
-  }
   .io-row {
-    width: 100%; max-width: 380px; display: flex; justify-content: space-between; margin-bottom: 18px;
+    width: 100%; max-width: 380px; display: flex; justify-content: space-between;
+    align-items: flex-start; margin-bottom: 18px;
   }
   .io-col .io-label { font-size: 13px; }
   .io-col .io-value { font-size: 30px; font-weight: 700; margin-top: 2px; }
   .io-col.in .io-label { color: #4ade80; }
   .io-col.out .io-label { color: #fb923c; }
   .io-col.out { text-align: right; }
+  .io-center { text-align: center; padding-top: 4px; }
+  .io-center .verb { font-size: 13px; color: #9aa4af; }
+  .io-center .emoji { font-size: 22px; margin-top: 2px; }
   .icons-row { width: 100%; max-width: 380px; display: flex; justify-content: space-around; margin-bottom: 4px; }
-  .icon-item { display: flex; flex-direction: column; align-items: center; width: 72px; }
+  .icon-item { display: flex; flex-direction: column; align-items: center; width: 84px; }
   .icon-circle {
     width: 52px; height: 52px; border-radius: 50%; background: #1c232b;
     display: flex; align-items: center; justify-content: center; font-size: 22px;
+    transition: background 0.4s ease;
   }
+  .icon-circle.charging { background: #14351f; }
+  .icon-circle.discharging { background: #3a1616; }
   .icon-watts { font-size: 12px; color: #9aa4af; margin-top: 5px; }
+  .icon-dir { font-size: 11px; margin-top: 1px; }
+  .icon-dir.charging { color: #4ade80; }
+  .icon-dir.discharging { color: #f87171; }
   .connector { width: 100%; max-width: 380px; height: 22px; position: relative; margin-bottom: 2px; }
   .connector::before {
     content: ""; position: absolute; left: 12%; right: 12%; top: 0; height: 1px; background: #2a333d;
@@ -1129,20 +1131,29 @@ DASHBOARD_HTML = """<!doctype html>
 </style>
 </head>
 <body>
-  <div class="header">
-    <span id="header-left">Cargando…</span>
-    <span id="header-right"></span>
-  </div>
-
   <div class="io-row">
     <div class="io-col in"><div class="io-label">Entrada</div><div class="io-value" id="in-w">-- W</div></div>
+    <div class="io-center">
+      <div class="verb" id="source-verb">Cargando…</div>
+      <div class="emoji" id="source-emoji"></div>
+    </div>
     <div class="io-col out"><div class="io-label">Salida</div><div class="io-value" id="out-w">-- W</div></div>
   </div>
 
   <div class="icons-row">
-    <div class="icon-item"><div class="icon-circle">🔌</div><div class="icon-watts" id="ac-w">0 W</div></div>
-    <div class="icon-item"><div class="icon-circle">☀️</div><div class="icon-watts" id="pv-w">0 W</div></div>
-    <div class="icon-item"><div class="icon-circle">🔋</div><div class="icon-watts" id="extra-in-w">0 W</div></div>
+    <div class="icon-item">
+      <div class="icon-circle" id="ac-circle">🔌</div>
+      <div class="icon-watts" id="ac-w">0 W</div>
+    </div>
+    <div class="icon-item">
+      <div class="icon-circle" id="extra-circle">🔋</div>
+      <div class="icon-watts" id="extra-w">0 W</div>
+      <div class="icon-dir" id="extra-dir"></div>
+    </div>
+    <div class="icon-item">
+      <div class="icon-circle" id="pv-circle">☀️</div>
+      <div class="icon-watts" id="pv-w">0 W</div>
+    </div>
   </div>
 
   <div class="ring-wrap">
@@ -1152,11 +1163,6 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
       </div>
     </div>
-  </div>
-
-  <div class="icons-row">
-    <div class="icon-item"><div class="icon-circle">📤</div><div class="icon-watts" id="out-total-w">0 W</div></div>
-    <div class="icon-item"><div class="icon-circle">🔋</div><div class="icon-watts" id="extra-out-w">0 W</div></div>
   </div>
 
   <div class="eta-box" id="eta-box" style="display:none">
@@ -1176,11 +1182,11 @@ DASHBOARD_HTML = """<!doctype html>
         const res = await fetch('/api/status');
         const d = await res.json();
         if (!d.ready) {
-          document.getElementById('header-left').textContent = d.error || 'No listo todavía';
+          document.getElementById('source-verb').textContent = d.error || 'No listo todavía';
           return;
         }
-        document.getElementById('header-left').textContent = d.source_verb + ' ' + d.source_emoji;
-        document.getElementById('header-right').textContent = d.has_ac ? '🔌 Con corriente' : '';
+        document.getElementById('source-verb').textContent = d.source_verb;
+        document.getElementById('source-emoji').textContent = d.source_emoji;
 
         const pct = d.percent != null ? d.percent : 0;
         const ring = document.getElementById('ring');
@@ -1202,9 +1208,29 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('out-w').textContent = d.out_w + ' W';
         document.getElementById('ac-w').textContent = d.ac_w + ' W';
         document.getElementById('pv-w').textContent = d.pv_w + ' W';
-        document.getElementById('extra-in-w').textContent = d.extra_in_w + ' W';
-        document.getElementById('out-total-w').textContent = d.out_w + ' W';
-        document.getElementById('extra-out-w').textContent = d.extra_out_w + ' W';
+
+        // Batería extra: verde/🔋 si carga (neto >= 0), rojo/🪫 si descarga hacia la Delta 2 (mismo criterio que el bot)
+        const extraCircle = document.getElementById('extra-circle');
+        const extraDir = document.getElementById('extra-dir');
+        const extraNet = d.extra_net_w;
+        if (extraNet == null) {
+          document.getElementById('extra-w').textContent = '-- W';
+          extraCircle.textContent = '🔋';
+          extraCircle.className = 'icon-circle';
+          extraDir.textContent = '';
+        } else if (extraNet < -10) {
+          document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
+          extraCircle.textContent = '🪫';
+          extraCircle.className = 'icon-circle discharging';
+          extraDir.textContent = '↓ descarga';
+          extraDir.className = 'icon-dir discharging';
+        } else {
+          document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
+          extraCircle.textContent = '🔋';
+          extraCircle.className = 'icon-circle charging';
+          extraDir.textContent = extraNet > 10 ? '↑ carga' : '';
+          extraDir.className = 'icon-dir charging';
+        }
 
         let batHtml = '';
         if (d.soc_delta2 != null) {
