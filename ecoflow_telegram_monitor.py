@@ -488,6 +488,26 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").strip()
+
+
+def set_dashboard_menu_button() -> None:
+    """Pone el botón del menú (al lado del clip, abajo a la izquierda) para
+    que abra el dashboard como Web App adentro de Telegram, sin salir a un
+    navegador aparte."""
+    if not DASHBOARD_URL:
+        return
+    resp = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/setChatMenuButton",
+        json={"menu_button": {"type": "web_app", "text": "📊 Panel", "web_app": {"url": DASHBOARD_URL}}},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload.get("ok"):
+        log.warning("No se pudo configurar el botón del dashboard: %s", payload)
+
+
 def _charge_source(pv_w, ac_w, system_net_w) -> tuple:
     """(verbo, emoji) de qué está alimentando al sistema (Delta 2 + batería
     extra) en este momento: corriente de la calle > solar (solo o + batería
@@ -1254,6 +1274,10 @@ def main() -> None:
         set_bot_commands()
     except Exception:
         log.exception("No se pudo registrar el menú de comandos (no bloqueante)")
+    try:
+        set_dashboard_menu_button()
+    except Exception:
+        log.exception("No se pudo configurar el botón del dashboard (no bloqueante)")
 
     threading.Thread(target=poll_commands, daemon=True).start()
     threading.Thread(target=report_timer, daemon=True).start()
