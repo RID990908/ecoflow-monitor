@@ -1099,13 +1099,15 @@ def get_dashboard_status() -> dict:
     percent = m["avg_soc"] if m["avg_soc"] is not None else m["soc_delta2"]
 
     eta_text = None
+    eta_ok = None
     remain_duration = None
     is_stable = bool(m["remain"] and m["remain"]["stable"])
     if is_stable:
         remain_duration = "—"
     elif m["remain"]:
         r = m["remain"]
-        eta_text = f"Full a las {r['eta']}" if r["charging_up"] else f"Dura hasta las {r['eta']}"
+        eta_ok = r["charging_up"]
+        eta_text = f"Llena a las {r['eta']}" if eta_ok else f"Dura hasta las {r['eta']}"
         remain_duration = f"{r['hours']}h {r['minutes']}m"
 
     return {
@@ -1123,6 +1125,7 @@ def get_dashboard_status() -> dict:
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],
         "eta_text": eta_text,
+        "eta_ok": eta_ok,
         "remain_duration": remain_duration,
         "threshold_text": m["threshold_line"] or None,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
@@ -1152,15 +1155,16 @@ DASHBOARD_HTML = """<!doctype html>
   .io-col .io-label { font-size: 13px; color: #6b7684; transition: color 200ms var(--ease-out); display: flex; align-items: center; gap: 4px; }
   .io-col.out .io-label { justify-content: flex-end; }
   .io-col .io-label.active { color: #4ade80; }
-  .io-col.out .io-label.active { color: #fb923c; }
+  .io-col.out .io-label.active { color: #f87171; }
   .io-svg { flex-shrink: 0; }
   .io-col .io-value { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .io-col.out { text-align: right; }
   .io-center { text-align: center; padding-top: 4px; }
   .io-center .verb { font-size: 13px; color: #9aa4af; }
   .io-center .emoji { font-size: 22px; margin-top: 2px; }
-  .icons-row { width: 100%; max-width: 380px; display: flex; justify-content: space-around; margin-bottom: 4px; }
+  .icons-row { width: 100%; max-width: 380px; display: flex; justify-content: space-around; margin-bottom: 14px; }
   .icon-item { display: flex; flex-direction: column; align-items: center; width: 84px; }
+  .icon-name { font-size: 10px; color: #6b7684; margin-top: 2px; letter-spacing: .3px; text-transform: uppercase; }
   .icon-circle {
     width: 52px; height: 52px; border-radius: 50%; background: #1c232b;
     display: flex; align-items: center; justify-content: center; font-size: 22px;
@@ -1222,9 +1226,10 @@ DASHBOARD_HTML = """<!doctype html>
   .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
   .live-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-    background: #4ade80; margin-right: 6px; vertical-align: middle;
+    background: #6b7684; margin-right: 6px; vertical-align: middle;
     transition: background-color 300ms var(--ease-out);
   }
+  .live-dot.ok { background: #4ade80; }
   .live-dot.stale { background: #ef4444; animation: pulse 1s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.3; } }
 </style>
@@ -1244,15 +1249,18 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="icon-circle" id="ac-circle">🔌</div>
       <div class="icon-watts" id="ac-w">0 W</div>
       <div class="icon-dir" id="ac-status"></div>
+      <div class="icon-name">AC</div>
     </div>
     <div class="icon-item">
       <div class="icon-circle" id="extra-circle">🔋</div>
       <div class="icon-watts" id="extra-w">0 W</div>
       <div class="icon-dir" id="extra-dir"></div>
+      <div class="icon-name">Extra</div>
     </div>
     <div class="icon-item">
       <div class="icon-circle" id="pv-circle">☀️</div>
       <div class="icon-watts" id="pv-w">0 W</div>
+      <div class="icon-name">Solar</div>
     </div>
   </div>
 
@@ -1306,12 +1314,24 @@ DASHBOARD_HTML = """<!doctype html>
       <rect x="1" y="1" width="22" height="10" rx="5" fill="none" stroke="currentColor" stroke-width="2"/>
     </svg>`;
 
+    function batteryFlow(netW) {
+      // mismo criterio que el informe de Telegram: neutral (gris) o carga (verde)/descarga (rojo)
+      if (netW == null || (netW > -5 && netW < 5)) return { state: 'neutral', label: 'Carga', suffix: '', cls: '' };
+      if (netW > 5) return { state: 'charging', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
+      return { state: 'discharging', label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
+    }
+
+    let reqId = 0;
     async function refresh() {
+      const myId = ++reqId;
       try {
         const res = await fetch('/api/status');
         const d = await res.json();
+        if (myId !== reqId) return; // llegó una respuesta vieja después de una más nueva, se descarta
         if (!d.ready) {
           document.getElementById('source-verb').textContent = d.error || 'No listo todavía';
+          document.getElementById('live-dot').classList.remove('ok');
+          document.getElementById('live-dot').classList.add('stale');
           return;
         }
         document.getElementById('source-verb').textContent = d.source_verb;
@@ -1329,64 +1349,44 @@ DASHBOARD_HTML = """<!doctype html>
           etaBox.classList.add('visible');
           const etaMain = document.getElementById('eta-main');
           etaMain.textContent = d.eta_text;
-          etaMain.className = 'eta-main ' + (d.eta_text.startsWith('Full') ? 'eta-ok' : 'eta-warn');
+          etaMain.className = 'eta-main ' + (d.eta_ok ? 'eta-ok' : 'eta-warn');
           document.getElementById('eta-sub').textContent = d.threshold_text || d.last_ac_text || '';
         } else {
           etaBox.classList.remove('visible');
         }
 
-        document.getElementById('in-w').textContent = d.in_w + ' W';
-        document.getElementById('out-w').textContent = d.out_w + ' W';
-        document.getElementById('ac-w').textContent = d.ac_w + ' W';
+        document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
+        document.getElementById('out-w').textContent = (d.out_w ?? '--') + ' W';
+        document.getElementById('ac-w').textContent = (d.ac_w ?? '--') + ' W';
         const acCircle = document.getElementById('ac-circle');
         const acStatus = document.getElementById('ac-status');
         acCircle.className = 'icon-circle' + (d.has_ac ? ' charging' : '');
         acStatus.textContent = d.has_ac ? 'Sí' : 'No';
         acStatus.className = 'icon-dir' + (d.has_ac ? ' charging' : '');
-        document.getElementById('pv-w').textContent = d.pv_w + ' W';
+        document.getElementById('pv-w').textContent = (d.pv_w ?? '--') + ' W';
+        document.getElementById('pv-circle').className = 'icon-circle' + (d.pv_w > 5 ? ' charging' : '');
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
 
-        // Batería extra: ícono verde si carga, rojo si descarga hacia la Delta 2,
-        // gris si está neutral — mismo criterio que el bot
+        // Batería extra: mismo criterio que las filas de abajo (batteryFlow), sin duplicar la lógica
         const extraCircle = document.getElementById('extra-circle');
         const extraDir = document.getElementById('extra-dir');
         const extraNet = d.extra_net_w;
-        if (extraNet == null || (extraNet > -5 && extraNet < 5)) {
-          document.getElementById('extra-w').textContent = (extraNet == null ? '--' : '0') + ' W';
-          extraCircle.innerHTML = batteryIcon('neutral');
-          extraCircle.className = 'icon-circle';
-          extraDir.textContent = '';
-          extraDir.className = 'icon-dir';
-        } else if (extraNet < -5) {
-          document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
-          extraCircle.innerHTML = batteryIcon('discharging');
-          extraCircle.className = 'icon-circle discharging';
-          extraDir.textContent = '↓ descarga';
-          extraDir.className = 'icon-dir discharging';
-        } else {
-          document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
-          extraCircle.innerHTML = batteryIcon('charging');
-          extraCircle.className = 'icon-circle charging';
-          extraDir.textContent = '↑ carga';
-          extraDir.className = 'icon-dir charging';
-        }
-
-        function batteryFlow(netW) {
-          // mismo criterio que el informe de Telegram: neutral (gris) o carga (verde)/descarga (rojo)
-          if (netW == null || (netW > -5 && netW < 5)) return { icon: batteryIcon('neutral'), label: 'Carga', suffix: '', cls: '' };
-          if (netW > 5) return { icon: batteryIcon('charging'), label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
-          return { icon: batteryIcon('discharging'), label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
-        }
+        const ef = batteryFlow(extraNet);
+        document.getElementById('extra-w').textContent = (extraNet == null ? '--' : Math.abs(extraNet)) + ' W';
+        extraCircle.innerHTML = batteryIcon(ef.state);
+        extraCircle.className = 'icon-circle ' + ef.cls;
+        extraDir.textContent = ef.state === 'charging' ? '↑ carga' : ef.state === 'discharging' ? '↓ descarga' : '';
+        extraDir.className = 'icon-dir ' + ef.cls;
 
         let batHtml = '';
         if (d.soc_delta2 != null) {
           const f = batteryFlow(d.delta2_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${f.icon} Delta 2 — ${f.label}</div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)} Delta 2 — ${f.label}</div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
         }
         if (d.soc_extra != null) {
           const f = batteryFlow(d.extra_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${f.icon} Batería Extra — ${f.label}</div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)} Batería Extra — ${f.label}</div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
         }
         document.getElementById('batteries').innerHTML = batHtml;
 
@@ -1401,6 +1401,7 @@ DASHBOARD_HTML = """<!doctype html>
         }
 
         document.getElementById('live-dot').classList.remove('stale');
+        document.getElementById('live-dot').classList.add('ok');
         lastSuccessAt = Date.now();
       } catch (e) {
         document.getElementById('live-dot').classList.add('stale');
