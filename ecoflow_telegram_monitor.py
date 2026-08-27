@@ -444,28 +444,35 @@ def get_pv_watts(data: dict):
 
 
 def get_ac_watts(data: dict):
-    """Potencia de entrada por corriente (cargador/pared), separada de la solar."""
+    """Potencia de entrada por corriente (cargador/pared). Campo directo
+    confirmado por la doc oficial de EcoFlow (inv.inputWatts = "Charging
+    power (W)")."""
     return _pick(data, "inv.inputWatts")
 
 
-AC_GAP_THRESHOLD_W = 500
 NOISE_FLOOR_W = 5  # por debajo de esto es ruido de medición, no transferencia real
+AC_VOLTAGE_THRESHOLD_MV = 50000  # ~50V; AC real ronda 110000-240000 mV, esto solo filtra ausencia/ruido
+
+
+def get_ac_present(data: dict) -> bool:
+    """AC físicamente conectado, sin importar si está cargando, en modo
+    paso-directo, o si la batería ya está llena. A diferencia del wattage
+    neto (que cae a ~0 en paso-directo y daba falsos "se fue la luz"), esto
+    mide el voltaje de entrada del inversor directamente. Campo confirmado
+    en la doc oficial de EcoFlow (inv.acInVol)."""
+    ac_in_vol = _pick(data, "inv.acInVol")
+    return bool(ac_in_vol and ac_in_vol > AC_VOLTAGE_THRESHOLD_MV)
 
 
 def classify_ac_and_battery_watts(data: dict, pv_w) -> tuple:
-    """inv.inputWatts (dato real de corriente AC) suele venir ausente incluso
-    cargando por AC. Como la transferencia hacia la batería extra ronda los
-    30-65W (mucho menor a lo que carga un cargador de pared), un excedente
-    grande entre el total y la solar (>500W) es mucho más probable que sea
-    corriente real de la calle; un excedente chico es más probable que sea
-    transferencia entre baterías. Devuelve (ac_w, battery_in_w)."""
-    ac_w = get_ac_watts(data)
-    if ac_w:
-        return ac_w, 0
+    """Devuelve (ac_w, battery_in_w). Si hay AC conectado (confirmado por
+    voltaje, no por wattage), ac_w es inv.inputWatts —puede ser 0 en
+    paso-directo y sigue siendo AC real—. Si no hay AC, cualquier excedente
+    sobre la solar se interpreta como transferencia entre baterías."""
+    if get_ac_present(data):
+        return (get_ac_watts(data) or 0), 0
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
     gap = total_in_w - (pv_w or 0)
-    if gap > AC_GAP_THRESHOLD_W:
-        return round(gap), 0
     return 0, (max(0, round(gap)) if gap > NOISE_FLOOR_W else 0)
 
 
@@ -528,17 +535,18 @@ def set_dashboard_menu_button() -> None:
         log.warning("No se pudo configurar el botón del dashboard: %s", payload)
 
 
-def _charge_source(pv_w, ac_w, system_net_w) -> tuple:
+def _charge_source(pv_w, ac_present, ac_w, system_net_w) -> tuple:
     """(verbo, emoji) de qué está alimentando al sistema (Delta 2 + batería
     extra) en este momento: corriente de la calle > solar (solo o + batería
-    si la solar no alcanza) > solo batería. "Cargando por" solo si hay una
-    fuente externa metiendo energía; si el sistema está neto descargando
-    (aunque sea solo la batería extra la que está compensando), es "Usando",
-    no "Cargando". Usa el neto de TODO el sistema, no solo el de la Delta 2,
+    si la solar no alcanza) > solo batería. Con AC conectado pero en
+    paso-directo (batería llena, ac_w~0) dice "Usando" en vez de "Cargando
+    por", porque no está entrando energía neta a la batería aunque el cable
+    siga puesto. Usa el neto de TODO el sistema, no solo el de la Delta 2,
     porque la batería que ayuda puede ser la extra."""
     has_solar = bool(pv_w and pv_w > NOISE_FLOOR_W)
-    if ac_w and ac_w > NOISE_FLOOR_W:
-        return "Cargando por", "🔌"
+    if ac_present:
+        verb = "Cargando por" if ac_w and ac_w > NOISE_FLOOR_W else "Usando"
+        return verb, "🔌"
     battery_helping = system_net_w is not None and system_net_w < -NOISE_FLOOR_W
     if has_solar and battery_helping:
         return "Usando", "☀️/🔋"
@@ -624,15 +632,19 @@ def _gather_metrics(passive: bool = False) -> dict:
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
     system_net_w = delta2_net_w + (extra_net_w or 0)
+    ac_present = get_ac_present(data)
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
-    source_verb, source_emoji = _charge_source(pv_w, ac_w, system_net_w)
+    source_verb, source_emoji = _charge_source(pv_w, ac_present, ac_w, system_net_w)
 
     avg_soc = round((soc_delta2 + soc_extra) / 2, 1) if soc_delta2 is not None and soc_extra is not None else None
 
     remain = None
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
-        charging_up = int(remain_min) > 0 and total_in_w > out_w
+        # El signo de pd.remainTime ya indica la dirección (confirmado en la
+        # doc oficial: >0 tiempo para cargar completo, <0 tiempo para
+        # descargar completo) — no hace falta comparar watts aparte.
+        charging_up = int(remain_min) > 0
         eta = datetime.now(TZ) + timedelta(minutes=abs(int(remain_min)))
         remain = {"hours": hours, "minutes": minutes, "charging_up": charging_up, "eta": eta.strftime("%H:%M")}
 
@@ -659,7 +671,7 @@ def _gather_metrics(passive: bool = False) -> dict:
         "system_net_w": system_net_w,
         "pv_w": pv_w,
         "ac_w": ac_w,
-        "has_ac": ac_w > NOISE_FLOOR_W,
+        "has_ac": ac_present,
         "out_w": out_w,
         "total_in_w": total_in_w,
         "source_verb": source_verb,
@@ -925,14 +937,20 @@ def ac_check_timer() -> None:
                 _daily_solar_wh += (pv_w or 0) * (AC_CHECK_MINUTES / 60)
                 _daily_consumed_wh += (out_w or 0) * (AC_CHECK_MINUTES / 60)
             ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
-            is_charging = ac_w > AC_WATTS_THRESHOLD
+            # Presencia real de AC (por voltaje), no por wattage neto — así no
+            # se dispara "se fue la luz" cuando la batería está llena y el AC
+            # sigue enchufado en paso-directo (0W netos pero AC presente).
+            is_charging = get_ac_present(data)
             if is_charging and not WAS_CHARGING_AC:
-                send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
-                log.info("Notificado inicio de carga AC (%s W)", ac_w)
+                if ac_w > AC_WATTS_THRESHOLD:
+                    send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
+                else:
+                    send_telegram("⚡ Llegó la corriente (la batería ya está llena, no está cargando neto).")
+                log.info("Notificado inicio de AC (%s W)", ac_w)
                 LAST_AC_TIMESTAMP = time.time()
             elif not is_charging and WAS_CHARGING_AC:
-                send_telegram("🔌⚠️ Se fue la luz: la Delta 2 dejó de cargar por AC.")
-                log.info("Notificado corte de luz (dejó de cargar por AC)")
+                send_telegram("🔌⚠️ Se fue la luz: la Delta 2 dejó de tener AC conectado.")
+                log.info("Notificado corte de luz (AC desconectado)")
 
             soc = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc")
             state_changed = is_charging != WAS_CHARGING_AC
