@@ -673,16 +673,6 @@ def _gather_metrics(passive: bool = False) -> dict:
     ]
     active_ports = [{"name": name, "watts": w} for name, w in ports if w]
 
-    # Solo lectura, no control: límites y preferencias ya configurados en el
-    # equipo (desde la app oficial), útiles para entender por qué se
-    # comporta de cierta manera. Campos confirmados en la doc oficial.
-    config_info = {
-        "backup_reserve_soc": _pick(data, "pd.bpPowerSoc"),
-        "min_discharge_soc": _pick(data, "bms_emsStatus.minDsgSoc"),
-        "max_charge_soc": _pick(data, "bms_emsStatus.maxChargeSoc"),
-        "solar_priority": _pick(data, "pd.pvChgPrioSet"),
-    }
-
     return {
         "soc_delta2": soc_delta2,
         "soc_extra": soc_extra,
@@ -700,7 +690,6 @@ def _gather_metrics(passive: bool = False) -> dict:
         "remain": remain,
         "threshold_line": threshold_line,
         "ports": active_ports,
-        "config_info": config_info,
     }
 
 
@@ -759,22 +748,6 @@ def build_report() -> str:
     # 4. Corriente
     lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(m['ac_w']) + ' W)' if m['has_ac'] else 'No'}")
     lines.append(_last_ac_line())
-
-    # 5. Configuración (solo lectura: límites y preferencias ya puestos desde la app)
-    ci = m["config_info"]
-    config_lines = []
-    if ci["backup_reserve_soc"] is not None:
-        config_lines.append(f"  Reserva de batería: {ci['backup_reserve_soc']}%")
-    if ci["min_discharge_soc"] is not None:
-        config_lines.append(f"  Límite mínimo de descarga: {ci['min_discharge_soc']}%")
-    if ci["max_charge_soc"] is not None:
-        config_lines.append(f"  Límite máximo de carga: {ci['max_charge_soc']}%")
-    if ci["solar_priority"] is not None:
-        config_lines.append(f"  Prioridad de carga solar: {'Sí' if ci['solar_priority'] else 'No'}")
-    if config_lines:
-        lines.append("")
-        lines.append("⚙️ *Configuración*")
-        lines.extend(config_lines)
 
     return "\n".join(lines)
 
@@ -1147,7 +1120,6 @@ def get_dashboard_status() -> dict:
         "threshold_text": m["threshold_line"] or None,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         "ports": m["ports"],
-        "config_info": m["config_info"],
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
     }
 
@@ -1296,11 +1268,6 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="ports"></div>
   </div>
 
-  <div class="ports" id="config-wrap" style="display:none">
-    <div class="title">Configuración</div>
-    <div id="config"></div>
-  </div>
-
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
@@ -1399,22 +1366,6 @@ DASHBOARD_HTML = """<!doctype html>
           ).join('');
         } else {
           portsWrap.style.display = 'none';
-        }
-
-        const ci = d.config_info || {};
-        const configLines = [];
-        if (ci.backup_reserve_soc != null) configLines.push(['Reserva de batería', ci.backup_reserve_soc + '%']);
-        if (ci.min_discharge_soc != null) configLines.push(['Límite mínimo de descarga', ci.min_discharge_soc + '%']);
-        if (ci.max_charge_soc != null) configLines.push(['Límite máximo de carga', ci.max_charge_soc + '%']);
-        if (ci.solar_priority != null) configLines.push(['Prioridad de carga solar', ci.solar_priority ? 'Sí' : 'No']);
-        const configWrap = document.getElementById('config-wrap');
-        if (configLines.length) {
-          configWrap.style.display = 'block';
-          document.getElementById('config').innerHTML = configLines.map(
-            ([label, val]) => `<div class="port-row"><span>${label}</span><span>${val}</span></div>`
-          ).join('');
-        } else {
-          configWrap.style.display = 'none';
         }
 
         document.getElementById('live-dot').classList.remove('stale');
