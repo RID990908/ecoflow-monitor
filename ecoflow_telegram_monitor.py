@@ -76,8 +76,10 @@ DAILY_SUMMARY_HOUR = int(os.environ.get("DAILY_SUMMARY_HOUR", "22"))
 # Horario silencioso: de noche no tiene sentido recibir el informe automático
 # cada media hora. Las alertas (llegó/se fue la luz, batería baja/llena) siguen
 # funcionando igual, solo se pausa el informe periódico.
-QUIET_HOUR_START = int(os.environ.get("QUIET_HOUR_START", "22"))
-QUIET_HOUR_END = int(os.environ.get("QUIET_HOUR_END", "6"))
+QUIET_START_HOUR = int(os.environ.get("QUIET_START_HOUR", "23"))
+QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
+QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "6"))
+QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
 
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
@@ -619,15 +621,15 @@ HELP_TEXT = (
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
-    f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_HOUR_START:02d}:00 a "
-    f"{QUIET_HOUR_END:02d}:00) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
+    f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
+    f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
     "También te aviso al llegar a 100% de carga."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
     f"Te mando un informe automático a las :00 y :30 de cada hora (pausado de noche, de "
-    f"{QUIET_HOUR_START:02d}:00 a {QUIET_HOUR_END:02d}:00) y te aviso apenas empiece a cargar "
-    "por corriente.\n\n" + HELP_TEXT
+    f"{QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a {QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) "
+    "y te aviso apenas empiece a cargar por corriente.\n\n" + HELP_TEXT
 )
 
 
@@ -693,11 +695,16 @@ def _seconds_until_next_slot() -> float:
     return (next_slot - now).total_seconds()
 
 
+_QUIET_START_MIN = QUIET_START_HOUR * 60 + QUIET_START_MINUTE
+_QUIET_END_MIN = QUIET_END_HOUR * 60 + QUIET_END_MINUTE
+
+
 def _in_quiet_hours(now=None) -> bool:
     now = now or datetime.now(TZ)
-    if QUIET_HOUR_START > QUIET_HOUR_END:  # el rango cruza la medianoche
-        return now.hour >= QUIET_HOUR_START or now.hour < QUIET_HOUR_END
-    return QUIET_HOUR_START <= now.hour < QUIET_HOUR_END
+    minute_of_day = now.hour * 60 + now.minute
+    if _QUIET_START_MIN > _QUIET_END_MIN:  # el rango cruza la medianoche
+        return minute_of_day >= _QUIET_START_MIN or minute_of_day < _QUIET_END_MIN
+    return _QUIET_START_MIN <= minute_of_day < _QUIET_END_MIN
 
 
 def report_timer() -> None:
@@ -731,8 +738,9 @@ def quiet_hours_timer() -> None:
         try:
             if now_quiet and not _quiet_mode_active:
                 send_telegram(
-                    f"🌙 Entrando en horario silencioso ({QUIET_HOUR_START:02d}:00–{QUIET_HOUR_END:02d}:00): "
-                    f"pauso los informes automáticos hasta las {QUIET_HOUR_END:02d}:00. Las alertas siguen activas."
+                    f"🌙 Entrando en horario silencioso ({QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d}–"
+                    f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}): pauso los informes automáticos hasta las "
+                    f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}. Las alertas siguen activas."
                 )
                 _quiet_mode_active = True
                 log.info("Horario silencioso activado")
@@ -883,9 +891,11 @@ def main() -> None:
         threading.Thread(target=start_private_mqtt, daemon=True).start()
 
     log.info(
-        "Monitor iniciado. Informe a las :00/:30 (pausado %02d:00-%02d:00), chequeo AC cada %.1f min.",
-        QUIET_HOUR_START,
-        QUIET_HOUR_END,
+        "Monitor iniciado. Informe a las :00/:30 (pausado %02d:%02d-%02d:%02d), chequeo AC cada %.1f min.",
+        QUIET_START_HOUR,
+        QUIET_START_MINUTE,
+        QUIET_END_HOUR,
+        QUIET_END_MINUTE,
         AC_CHECK_MINUTES,
     )
     while True:
