@@ -746,7 +746,7 @@ HELP_TEXT = (
     f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
     f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
     "También te aviso al llegar a 100% de carga.\n\n"
-    "🔆 De 6:00 AM a 7:30 PM te mando cada media hora qué encender/apagar (nevera, "
+    "🔆 De 6:00 AM a 12:00 AM te mando cada media hora qué encender/apagar (nevera, "
     "TV, laptop, power bank) según el plan.\n\n"
     "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
     "(65-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
@@ -769,8 +769,8 @@ def handle_command(text: str, chat_id: str) -> None:
         msg = build_load_advisor_message()
         if not msg:
             msg = (
-                "🌙 Fuera de franja (6:00 AM–7:30 PM): frío e internet ON, nevera OFF, "
-                "resto OFF (TV solo 1h si anocheció con 75%+)."
+                "🌙 Fuera de franja (6:00 AM–12:00 AM): internet ON, resto OFF, frío "
+                "apagado desde las 12 AM hasta el amanecer."
             )
         send_telegram(msg, chat_id=chat_id)
     elif cmd == "/alerta":
@@ -1070,7 +1070,7 @@ def daily_summary_timer() -> None:
 # ventanas con criterios distintos: mediodía (según exceso de consumo, igual
 # que la nevera) y 6:30-7:30 PM (según si la batería llegó sobrada al 75%).
 LOAD_ADVISOR_START_MIN = 6 * 60
-LOAD_ADVISOR_END_MIN = 19 * 60 + 30
+LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
 FRIO_EMERGENCY_THRESHOLD = 25  # regla 2: en horas "on", el frío solo se apaga en emergencia (<25%)
 TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
 NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
