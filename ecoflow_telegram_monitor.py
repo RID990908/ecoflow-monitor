@@ -1098,85 +1098,71 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _frio_status(avg_soc) -> tuple:
+def _frio_line(avg_soc) -> str:
     """Regla 2: el frío es prioritario, se mantiene encendido siempre (hasta
     de noche) salvo emergencia de batería por debajo del 15%."""
     if avg_soc is not None and avg_soc < FRIO_EMERGENCY_THRESHOLD:
-        return "OFF", f"⚠️ Frío en EMERGENCIA — batería {avg_soc:.1f}%, apagar"
-    return "ON", None
+        return f"🧊 Frío: EMERGENCIA — batería {avg_soc:.1f}%, apagar"
+    return "🧊 Frío: ON"
 
 
-def _nevera_tv_status(nevera_mode: str, pv_w, out_w) -> tuple:
+def _nevera_tv_lines(nevera_mode: str, pv_w, out_w) -> tuple:
     """Regla 1: si la salida supera la entrada se apaga primero la NEVERA y,
-    si no alcanza, después la TV (umbral: los 100 W de la nevera). Devuelve
-    (estado_nevera, estado_tv, acción o None)."""
+    si no alcanza, después la TV (umbral: los 100 W de la nevera)."""
     pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
     out_str = f"{out_w} W" if out_w is not None else "N/D"
     if nevera_mode in ("off_morning", "off_night"):
-        return "OFF", "OFF", None
+        return "🥶 Nevera: OFF", "📺 TV: OFF"
     excess = (out_w - pv_w) if (out_w is not None and pv_w is not None) else None
     if nevera_mode == "conditional_afternoon":
         if excess is not None and excess > 0:
-            return "OFF", "OFF", f"⚠️ Apagar nevera (salida {out_str} > entrada {pv_str})"
-        return "ON", "OFF", None
+            return f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: OFF"
+        return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OFF"
     # conditional_peak (9 AM-3 PM), con TV en juego
     if excess is None or excess <= 0:
-        return "ON", "ON", None
+        return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OK, ventana ideal (1 h)"
     if excess <= NEVERA_WATTS:
-        return "OFF", "ON", f"⚠️ Apagar nevera 30-40 min (salida {out_str} > entrada {pv_str})"
-    return "OFF", "OFF", f"⚠️ Apagar nevera y TV (salida {out_str} > entrada {pv_str})"
+        return f"🥶 Nevera: APAGAR 30-40 min (salida {out_str} > entrada {pv_str})", "📺 TV: OK, alcanza con la nevera"
+    return f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: apagar también"
 
 
-def _powerbank_status(now) -> str:
+def _powerbank_line(now) -> str:
     minute_of_day = now.hour * 60 + now.minute
-    return "ON" if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN else "OFF"
+    if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
+        return "🔋 Power bank: cargar (10 AM–2 PM)"
+    return "🔋 Power bank: OFF"
+
+
+def _laptop_line(block: dict) -> str:
+    if block["laptop"] == "full":
+        return "💻 Laptop: ON, ventana principal"
+    if block["laptop"] == "off":
+        return "💻 Laptop: OFF"
+    return block["laptop_text"]
 
 
 def build_load_advisor_message() -> str:
-    """Solo agrupa lo que está ON/OFF y destaca lo que realmente requiere una
-    decisión (⚠️): no repite una línea fija por cada carga si no hay nada que
-    evaluar en ella."""
+    """Seis líneas fijas (Internet, Frío, Laptop, Nevera, TV, Power bank) pero
+    cada una ya evalúa el estado real (watts, batería) en vez de ser un texto
+    fijo — no se agrega el ventilador porque nunca hay nada que decidir ahí."""
     block = _current_load_block()
     if block is None:
         return ""
     now = datetime.now(TZ)
     m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-
-    on_list = ["Internet", "Ventilador"]
-    off_list = []
-    actions = []
-
-    frio_status, frio_action = _frio_status(m["avg_soc"])
-    (on_list if frio_status == "ON" else off_list).append("Frío")
-    if frio_action:
-        actions.append(frio_action)
-
-    nevera_status, tv_status, nevera_action = _nevera_tv_status(block["nevera"], m["pv_w"], m["out_w"])
-    (on_list if nevera_status == "ON" else off_list).append("Nevera")
-    (on_list if tv_status == "ON" else off_list).append("TV")
-    if nevera_action:
-        actions.append(nevera_action)
-
-    (on_list if _powerbank_status(now) == "ON" else off_list).append("Power bank")
-
-    laptop_line = None
-    if block["laptop"] == "full":
-        on_list.append("Laptop")
-    elif block["laptop"] == "off":
-        off_list.append("Laptop")
-    else:
-        laptop_line = block["laptop_text"]
-
-    lines = [f"🔆 *Gestión de cargas* · {block['label']}"]
-    lines.append(f"🟢 ON: {', '.join(on_list)}")
-    if off_list:
-        lines.append(f"⚪ OFF: {', '.join(off_list)}")
-    if laptop_line:
-        lines.append(laptop_line)
-    lines.extend(actions)
-    lines.append("")
-    lines.append(f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})")
+    nevera_line, tv_line = _nevera_tv_lines(block["nevera"], m["pv_w"], m["out_w"])
+    lines = [
+        f"🔆 *Gestión de cargas* · {block['label']}",
+        "✅ Internet: ON",
+        _frio_line(m["avg_soc"]),
+        _laptop_line(block),
+        nevera_line,
+        tv_line,
+        _powerbank_line(now),
+        "",
+        f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
+    ]
     return "\n".join(lines)
 
 
