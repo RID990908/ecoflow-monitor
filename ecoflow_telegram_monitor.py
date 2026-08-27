@@ -1167,6 +1167,7 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="icon-item">
       <div class="icon-circle" id="ac-circle">🔌</div>
       <div class="icon-watts" id="ac-w">0 W</div>
+      <div class="icon-dir" id="ac-status"></div>
     </div>
     <div class="icon-item">
       <div class="icon-circle" id="extra-circle">🔋</div>
@@ -1235,6 +1236,11 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('in-w').textContent = d.in_w + ' W';
         document.getElementById('out-w').textContent = d.out_w + ' W';
         document.getElementById('ac-w').textContent = d.ac_w + ' W';
+        const acCircle = document.getElementById('ac-circle');
+        const acStatus = document.getElementById('ac-status');
+        acCircle.className = 'icon-circle' + (d.has_ac ? ' charging' : '');
+        acStatus.textContent = d.has_ac ? 'Sí' : 'No';
+        acStatus.className = 'icon-dir' + (d.has_ac ? ' charging' : '');
         document.getElementById('pv-w').textContent = d.pv_w + ' W';
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
