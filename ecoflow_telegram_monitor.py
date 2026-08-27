@@ -486,6 +486,7 @@ def set_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
+        {"command": "cargas", "description": "Qué encender/apagar ahora según el plan"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
@@ -738,6 +739,7 @@ def build_report() -> str:
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
+    "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
@@ -762,6 +764,14 @@ def handle_command(text: str, chat_id: str) -> None:
     cmd = parts[0].split("@")[0].lower()
     if cmd == "/reporte":
         send_telegram(build_report(), chat_id=chat_id)
+    elif cmd == "/cargas":
+        msg = build_load_advisor_message()
+        if not msg:
+            msg = (
+                "🌙 Fuera de la franja del plan (6:00 AM–6:30 PM hora Cuba): nevera e "
+                "internet ON, todo lo demás (laptop, frío, TV, power bank) OFF."
+            )
+        send_telegram(msg, chat_id=chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)
