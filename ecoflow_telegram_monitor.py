@@ -449,7 +449,7 @@ def get_ac_watts(data: dict):
 
 
 AC_GAP_THRESHOLD_W = 500
-NOISE_FLOOR_W = 10  # por debajo de esto es ruido de medición, no transferencia real
+NOISE_FLOOR_W = 5  # por debajo de esto es ruido de medición, no transferencia real
 
 
 def classify_ac_and_battery_watts(data: dict, pv_w) -> tuple:
@@ -1287,7 +1287,7 @@ DASHBOARD_HTML = """<!doctype html>
           extraCircle.textContent = '🔋';
           extraCircle.className = 'icon-circle';
           extraDir.textContent = '';
-        } else if (extraNet < -10) {
+        } else if (extraNet < -5) {
           document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
           extraCircle.textContent = '🪫';
           extraCircle.className = 'icon-circle discharging';
@@ -1297,14 +1297,14 @@ DASHBOARD_HTML = """<!doctype html>
           document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
           extraCircle.textContent = '🔋';
           extraCircle.className = 'icon-circle charging';
-          extraDir.textContent = extraNet > 10 ? '↑ carga' : '';
+          extraDir.textContent = extraNet > 5 ? '↑ carga' : '';
           extraDir.className = 'icon-dir charging';
         }
 
         function batteryFlow(netW) {
           // mismo criterio que el informe de Telegram: 🔋 carga/neutral, 🪫 descarga
-          if (netW == null || (netW > -10 && netW < 10)) return { emoji: '🔋', label: 'Carga', suffix: '', cls: '' };
-          if (netW > 10) return { emoji: '🔋', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
+          if (netW == null || (netW > -5 && netW < 5)) return { emoji: '🔋', label: 'Carga', suffix: '', cls: '' };
+          if (netW > 5) return { emoji: '🔋', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
           return { emoji: '🪫', label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
         }
 
