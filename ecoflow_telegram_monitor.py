@@ -688,7 +688,7 @@ def build_report() -> str:
 
 
 LIVE_UPDATE_SECONDS = 15
-LIVE_MAX_MINUTES = 30  # tope de seguridad: si te olvidás de /parar, se corta solo
+LIVE_MAX_MINUTES = 12 * 60  # tope de seguridad: si te olvidás de /parar, se corta solo
 
 _live_lock = threading.Lock()
 _live_message_id = None
