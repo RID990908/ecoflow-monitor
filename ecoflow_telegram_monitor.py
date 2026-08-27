@@ -1165,7 +1165,8 @@ DASHBOARD_HTML = """<!doctype html>
   .eta-box .eta-main { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .eta-main.eta-ok { color: #4ade80; }
   .eta-main.eta-warn { color: #f87171; }
-  .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; }
+  .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; justify-content: center; }
+  .eta-box .eta-sub .batt-icon { width: 14px; }
   .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
   .battery-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -1303,7 +1304,12 @@ DASHBOARD_HTML = """<!doctype html>
           const etaMain = document.getElementById('eta-main');
           etaMain.textContent = d.eta_text;
           etaMain.className = 'eta-main ' + (d.eta_ok ? 'eta-ok' : 'eta-warn');
-          document.getElementById('eta-sub').textContent = d.threshold_text || d.last_ac_text || '';
+          const etaSub = document.getElementById('eta-sub');
+          if (d.threshold_text) {
+            etaSub.innerHTML = batteryIcon('discharging') + d.threshold_text;
+          } else {
+            etaSub.textContent = d.last_ac_text || '';
+          }
         } else {
           etaBox.classList.remove('visible');
         }
