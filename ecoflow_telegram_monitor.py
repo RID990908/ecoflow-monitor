@@ -23,6 +23,7 @@ Uso:
 import base64
 import hashlib
 import hmac
+import http.server
 import json
 import logging
 import os
@@ -559,19 +560,11 @@ def _last_ac_line() -> str:
     return f"⚡ Última vez que llegó corriente: hace {_format_elapsed(time.time() - LAST_AC_TIMESTAMP)}"
 
 
-def build_report() -> str:
-    if not ECOFLOW_READY:
-        return (
-            "📊 *Informe EcoFlow*\n\n"
-            "⏳ EcoFlow todavía no está configurado (esperando ACCESS_KEY/SECRET_KEY "
-            "de developer.ecoflow.com). Avisá cuando estén listas."
-        )
-
-    try:
-        data = get_device_quota(SN_DELTA2)
-    except Exception as exc:
-        log.exception("Error consultando la Delta 2")
-        return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
+def _gather_metrics() -> dict:
+    """Junta y deriva todos los datos de un vistazo: la usan tanto el informe
+    de Telegram como el dashboard web, para no duplicar la lógica de campos
+    confiables/no confiables que costó tanto afinar."""
+    data = get_device_quota(SN_DELTA2)
 
     soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
@@ -590,46 +583,22 @@ def build_report() -> str:
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
     system_net_w = delta2_net_w + (extra_net_w or 0)
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
-
     source_verb, source_emoji = _charge_source(pv_w, ac_w, system_net_w)
 
-    lines = [f"📊 *Informe EcoFlow* · {source_verb} {source_emoji}", ""]
+    avg_soc = round((soc_delta2 + soc_extra) / 2, 1) if soc_delta2 is not None and soc_extra is not None else None
 
-    # 1. Datos del sistema (lo más importante: cuánta carga queda)
-    lines.append("📋 *Datos del sistema*")
-    delta2_emoji, delta2_label, delta2_suffix = _battery_flow_emoji(delta2_net_w)
-    soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
-    lines.append(f"{delta2_emoji} Delta 2 — {delta2_label}: *{soc_delta2_str}%*{delta2_suffix}")
-    if soc_extra is not None:
-        extra_emoji, extra_label, extra_suffix = _battery_flow_emoji(extra_net_w)
-        lines.append(f"{extra_emoji} Batería Extra — {extra_label}: *{soc_extra:.1f}%*{extra_suffix}")
-    combined = _combined_line(soc_delta2, soc_extra, system_net_w)
-    if combined:
-        lines.append(combined)
-    lines.append("")
-
-    # 2. Flujo de energía
-    lines.append("🔄 *Flujo de energía*")
-    lines.append(f"📥 Entrada total: {total_in_w} W")
-    lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
-    lines.append(f"📤 Salida: {out_w} W")
+    remain = None
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
         charging_up = int(remain_min) > 0 and total_in_w > out_w
-        verb = "para llenarse" if charging_up else "de autonomía"
         eta = datetime.now(TZ) + timedelta(minutes=abs(int(remain_min)))
-        eta_verb = "vas a estar full a las" if charging_up else "dura hasta las"
-        lines.append(f"⏱ ~{hours}h {minutes}m {verb} ({eta_verb} {eta.strftime('%H:%M')})")
+        remain = {"hours": hours, "minutes": minutes, "charging_up": charging_up, "eta": eta.strftime("%H:%M")}
+
     if soc_extra is not None:
-        avg_soc = (soc_delta2 + soc_extra) / 2 if soc_delta2 is not None else None
         threshold_line = _time_to_threshold_line(avg_soc, system_net_w, 2, 20)
     else:
         threshold_line = _time_to_threshold_line(soc_delta2, delta2_net_w, 1, 20)
-    if threshold_line:
-        lines.append(threshold_line)
-    lines.append("")
 
-    # 3. Puertos (solo si hay algo conectado)
     ports = [
         ("USB-C 1", _pick(data, "pd.typec1Watts")),
         ("USB-C 2", _pick(data, "pd.typec2Watts")),
@@ -637,15 +606,80 @@ def build_report() -> str:
         ("USB 2", _pick(data, "pd.usb2Watts")),
         ("Auto (12V)", _pick(data, "pd.carWatts")),
     ]
-    active_ports = [(name, w) for name, w in ports if w]
-    if active_ports:
+    active_ports = [{"name": name, "watts": w} for name, w in ports if w]
+
+    return {
+        "soc_delta2": soc_delta2,
+        "soc_extra": soc_extra,
+        "avg_soc": avg_soc,
+        "delta2_net_w": delta2_net_w,
+        "extra_net_w": extra_net_w,
+        "system_net_w": system_net_w,
+        "pv_w": pv_w,
+        "ac_w": ac_w,
+        "has_ac": ac_w > NOISE_FLOOR_W,
+        "out_w": out_w,
+        "total_in_w": total_in_w,
+        "source_verb": source_verb,
+        "source_emoji": source_emoji,
+        "remain": remain,
+        "threshold_line": threshold_line,
+        "ports": active_ports,
+    }
+
+
+def build_report() -> str:
+    if not ECOFLOW_READY:
+        return (
+            "📊 *Informe EcoFlow*\n\n"
+            "⏳ EcoFlow todavía no está configurado (esperando ACCESS_KEY/SECRET_KEY "
+            "de developer.ecoflow.com). Avisá cuando estén listas."
+        )
+
+    try:
+        m = _gather_metrics()
+    except Exception as exc:
+        log.exception("Error consultando la Delta 2")
+        return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
+
+    lines = [f"📊 *Informe EcoFlow* · {m['source_verb']} {m['source_emoji']}", ""]
+
+    # 1. Datos del sistema (lo más importante: cuánta carga queda)
+    lines.append("📋 *Datos del sistema*")
+    delta2_emoji, delta2_label, delta2_suffix = _battery_flow_emoji(m["delta2_net_w"])
+    soc_delta2_str = f"{m['soc_delta2']:.1f}" if m["soc_delta2"] is not None else "N/D"
+    lines.append(f"{delta2_emoji} Delta 2 — {delta2_label}: *{soc_delta2_str}%*{delta2_suffix}")
+    if m["soc_extra"] is not None:
+        extra_emoji, extra_label, extra_suffix = _battery_flow_emoji(m["extra_net_w"])
+        lines.append(f"{extra_emoji} Batería Extra — {extra_label}: *{m['soc_extra']:.1f}%*{extra_suffix}")
+    combined = _combined_line(m["soc_delta2"], m["soc_extra"], m["system_net_w"])
+    if combined:
+        lines.append(combined)
+    lines.append("")
+
+    # 2. Flujo de energía
+    lines.append("🔄 *Flujo de energía*")
+    lines.append(f"📥 Entrada total: {m['total_in_w']} W")
+    lines.append(f"☀️ Entrada solar: {m['pv_w'] if m['pv_w'] is not None else 'N/D'} W")
+    lines.append(f"📤 Salida: {m['out_w']} W")
+    if m["remain"]:
+        r = m["remain"]
+        verb = "para llenarse" if r["charging_up"] else "de autonomía"
+        eta_verb = "vas a estar full a las" if r["charging_up"] else "dura hasta las"
+        lines.append(f"⏱ ~{r['hours']}h {r['minutes']}m {verb} ({eta_verb} {r['eta']})")
+    if m["threshold_line"]:
+        lines.append(m["threshold_line"])
+    lines.append("")
+
+    # 3. Puertos (solo si hay algo conectado)
+    if m["ports"]:
         lines.append("🔗 *Puertos*")
-        for name, w in active_ports:
-            lines.append(f"  {name}: {w} W")
+        for p in m["ports"]:
+            lines.append(f"  {p['name']}: {p['watts']} W")
         lines.append("")
 
     # 4. Corriente
-    lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(ac_w) + ' W)' if ac_w > NOISE_FLOOR_W else 'No'}")
+    lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(m['ac_w']) + ' W)' if m['has_ac'] else 'No'}")
     lines.append(_last_ac_line())
 
     return "\n".join(lines)
@@ -955,6 +989,219 @@ def daily_summary_timer() -> None:
             log.exception("Error mandando el resumen diario")
 
 
+# --- Dashboard web: la misma info que el bot, en vivo, sin tener que pedirla ---
+PORT = int(os.environ.get("PORT", "8080"))
+
+
+def get_dashboard_status() -> dict:
+    if not ECOFLOW_READY:
+        return {"ready": False, "error": "EcoFlow todavía no está configurado"}
+    try:
+        m = _gather_metrics()
+    except Exception as exc:
+        return {"ready": False, "error": str(exc)}
+
+    percent = m["avg_soc"] if m["avg_soc"] is not None else m["soc_delta2"]
+
+    eta_text = None
+    if m["remain"]:
+        r = m["remain"]
+        eta_text = f"Full a las {r['eta']}" if r["charging_up"] else f"Dura hasta las {r['eta']}"
+
+    return {
+        "ready": True,
+        "percent": percent,
+        "soc_delta2": m["soc_delta2"],
+        "soc_extra": m["soc_extra"],
+        "source_verb": m["source_verb"],
+        "source_emoji": m["source_emoji"],
+        "pv_w": m["pv_w"],
+        "ac_w": m["ac_w"],
+        "has_ac": m["has_ac"],
+        "in_w": m["total_in_w"],
+        "out_w": m["out_w"],
+        "eta_text": eta_text,
+        "threshold_text": m["threshold_line"] or None,
+        "last_ac_text": _last_ac_line().replace("⚡ ", ""),
+        "ports": m["ports"],
+        "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
+    }
+
+
+DASHBOARD_HTML = """<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>EcoFlow</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #0b0f14; color: #f5f5f5;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center; padding: 24px 16px 60px;
+  }
+  .header { font-size: 15px; color: #9aa4af; margin-bottom: 18px; text-align: center; }
+  .ring-wrap { position: relative; width: 260px; height: 260px; margin-bottom: 10px; }
+  .ring {
+    width: 100%; height: 100%; border-radius: 50%;
+    background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.6s ease;
+  }
+  .ring-inner {
+    width: 78%; height: 78%; border-radius: 50%; background: #0b0f14;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .pct { font-size: 52px; font-weight: 700; line-height: 1; }
+  .pct-sub { font-size: 13px; color: #9aa4af; margin-top: 6px; }
+  .eta-box {
+    margin-top: 6px; padding: 14px 22px; border-radius: 16px; background: #141b22;
+    text-align: center; max-width: 340px;
+  }
+  .eta-box .eta-main { font-size: 22px; font-weight: 700; color: #4ade80; }
+  .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; }
+  .stats-row {
+    display: flex; gap: 12px; margin-top: 20px; width: 100%; max-width: 380px;
+  }
+  .stat-card {
+    flex: 1; background: #141b22; border-radius: 14px; padding: 12px; text-align: center;
+  }
+  .stat-card .label { font-size: 12px; color: #9aa4af; }
+  .stat-card .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .batteries { width: 100%; max-width: 380px; margin-top: 14px; }
+  .battery-row {
+    display: flex; justify-content: space-between; align-items: center;
+    background: #141b22; border-radius: 14px; padding: 12px 16px; margin-top: 8px;
+  }
+  .battery-row .name { font-size: 14px; color: #cbd5e1; }
+  .battery-row .val { font-size: 16px; font-weight: 700; }
+  .ports { width: 100%; max-width: 380px; margin-top: 14px; }
+  .ports .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
+  .port-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
+  .updated { margin-top: 22px; font-size: 12px; color: #5b6670; }
+  .error { color: #f87171; margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="header" id="header">Cargando…</div>
+  <div class="ring-wrap">
+    <div class="ring" id="ring">
+      <div class="ring-inner">
+        <div class="pct" id="pct">--%</div>
+        <div class="pct-sub" id="pct-sub"></div>
+      </div>
+    </div>
+  </div>
+  <div class="eta-box" id="eta-box" style="display:none">
+    <div class="eta-main" id="eta-main"></div>
+    <div class="eta-sub" id="eta-sub"></div>
+  </div>
+  <div class="stats-row">
+    <div class="stat-card"><div class="label">Entrada</div><div class="value" id="in-w">-- W</div></div>
+    <div class="stat-card"><div class="label">Salida</div><div class="value" id="out-w">-- W</div></div>
+    <div class="stat-card"><div class="label">Corriente</div><div class="value" id="ac">--</div></div>
+  </div>
+  <div class="batteries" id="batteries"></div>
+  <div class="ports" id="ports-wrap" style="display:none">
+    <div class="title">Puertos activos</div>
+    <div id="ports"></div>
+  </div>
+  <div class="updated" id="updated"></div>
+  <script>
+    async function refresh() {
+      try {
+        const res = await fetch('/api/status');
+        const d = await res.json();
+        if (!d.ready) {
+          document.getElementById('header').textContent = d.error || 'No listo todavía';
+          return;
+        }
+        document.getElementById('header').textContent = d.source_verb + ' ' + d.source_emoji;
+
+        const pct = d.percent != null ? d.percent : 0;
+        const ring = document.getElementById('ring');
+        ring.style.setProperty('--pct', pct);
+        ring.style.setProperty('--ring-color', pct <= 20 ? '#ef4444' : '#22c55e');
+        document.getElementById('pct').textContent = (d.percent != null ? d.percent.toFixed(1) : '--') + '%';
+        document.getElementById('pct-sub').textContent = 'Total del sistema';
+
+        const etaBox = document.getElementById('eta-box');
+        if (d.eta_text) {
+          etaBox.style.display = 'block';
+          document.getElementById('eta-main').textContent = d.eta_text;
+          document.getElementById('eta-sub').textContent = d.threshold_text || d.last_ac_text || '';
+        } else {
+          etaBox.style.display = 'none';
+        }
+
+        document.getElementById('in-w').textContent = d.in_w + ' W';
+        document.getElementById('out-w').textContent = d.out_w + ' W';
+        document.getElementById('ac').textContent = d.has_ac ? 'Sí' : 'No';
+
+        let batHtml = '';
+        if (d.soc_delta2 != null) {
+          batHtml += `<div class="battery-row"><div class="name">Delta 2</div><div class="val">${d.soc_delta2.toFixed(1)}%</div></div>`;
+        }
+        if (d.soc_extra != null) {
+          batHtml += `<div class="battery-row"><div class="name">Batería Extra</div><div class="val">${d.soc_extra.toFixed(1)}%</div></div>`;
+        }
+        document.getElementById('batteries').innerHTML = batHtml;
+
+        const portsWrap = document.getElementById('ports-wrap');
+        if (d.ports && d.ports.length) {
+          portsWrap.style.display = 'block';
+          document.getElementById('ports').innerHTML = d.ports.map(
+            p => `<div class="port-row"><span>${p.name}</span><span>${p.watts} W</span></div>`
+          ).join('');
+        } else {
+          portsWrap.style.display = 'none';
+        }
+
+        document.getElementById('updated').textContent = 'Actualizado ' + d.updated_at;
+      } catch (e) {
+        document.getElementById('header').textContent = 'Error de conexión, reintentando…';
+      }
+    }
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>
+"""
+
+
+class _DashboardHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass  # ya logueamos lo importante aparte; esto evita ruido por cada poll
+
+    def _send(self, code: int, body: bytes, content_type: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html"):
+            self._send(200, DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif self.path == "/api/status":
+            try:
+                payload = json.dumps(get_dashboard_status()).encode("utf-8")
+                self._send(200, payload, "application/json")
+            except Exception as exc:
+                payload = json.dumps({"ready": False, "error": str(exc)}).encode("utf-8")
+                self._send(500, payload, "application/json")
+        else:
+            self._send(404, b"not found", "text/plain")
+
+
+def run_dashboard_server() -> None:
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), _DashboardHandler)
+    log.info("Dashboard web escuchando en el puerto %d", PORT)
+    server.serve_forever()
+
+
 def main() -> None:
     try:
         set_bot_commands()
@@ -968,6 +1215,7 @@ def main() -> None:
     threading.Thread(target=daily_summary_timer, daemon=True).start()
     threading.Thread(target=quiet_hours_timer, daemon=True).start()
     threading.Thread(target=weekly_cleanup_timer, daemon=True).start()
+    threading.Thread(target=run_dashboard_server, daemon=True).start()
     if USE_PRIVATE_API:
         threading.Thread(target=start_private_mqtt, daemon=True).start()
 
