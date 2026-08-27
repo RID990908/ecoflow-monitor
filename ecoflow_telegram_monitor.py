@@ -746,11 +746,10 @@ HELP_TEXT = (
     f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
     f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
     "También te aviso al llegar a 100% de carga.\n\n"
-    "🔆 Además, de 6:00 AM a 6:30 PM te mando cada media hora qué debería estar "
-    "encendido/apagado (laptop, frío, TV, power bank) según el plan y si conviene "
-    "apagar el frío o la TV porque el consumo supera la entrada solar.\n\n"
-    "⚠️ Y si el ritmo de descarga actual proyecta que vas a llegar por debajo de la "
-    "meta de batería (70-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
+    "🔆 De 6:00 AM a 6:30 PM te mando cada media hora qué encender/apagar (nevera, "
+    "TV, laptop, power bank) según el plan.\n\n"
+    "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
+    "(65-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
@@ -770,8 +769,8 @@ def handle_command(text: str, chat_id: str) -> None:
         msg = build_load_advisor_message()
         if not msg:
             msg = (
-                "🌙 Fuera de la franja del plan (6:00 AM–6:30 PM hora Cuba): nevera e "
-                "internet ON, todo lo demás (laptop, frío, TV, power bank) OFF."
+                "🌙 Fuera de franja (6:00 AM–6:30 PM): frío e internet ON, nevera OFF, "
+                "resto OFF (TV solo 1h si anocheció con 75%+)."
             )
         send_telegram(msg, chat_id=chat_id)
     elif cmd == "/alerta":
@@ -1062,37 +1061,32 @@ def daily_summary_timer() -> None:
 
 # --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
 # 18:30, que dice qué debería estar encendido/apagado según el bloque horario
-# del plan (nevera/internet/ventilador siempre libres, laptop/frío/TV/power
-# bank condicionados) y si el consumo actual está superando la entrada solar.
-# El ventilador no aparece en el mensaje: está "libre" en todos los bloques,
-# no hay ninguna decisión que tomar con él.
+# del plan. El frío es prioritario (queda ON siempre, incluso de noche, salvo
+# emergencia de batería) y la nevera es la carga gestionable que se apaga de
+# noche y se enciende/apaga según sol de día — al revés que en la versión
+# anterior del plan. Internet y ventilador son siempre libres; el ventilador
+# no aparece en el mensaje porque no hay ninguna decisión que tomar con él.
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 18 * 60 + 30
-FRIO_MIN_SOLAR_W = 250  # regla 2: el frío solo se enciende con >250 W de entrada
-FRIO_WATTS = 140  # para estimar si apagar el frío alcanza para cubrir el exceso de salida
+FRIO_EMERGENCY_THRESHOLD = 15  # regla 2: el frío solo se apaga en emergencia (<15%)
+NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
 POWERBANK_START_MIN = 10 * 60
-POWERBANK_END_MIN = 14 * 60  # regla 4: power bank siempre en 10 AM-2 PM, nunca de noche
+POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
 
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 9 * 60, "label": "6:00–9:00 AM",
-     "laptop": "💻 Laptop: solo si es imprescindible, todavía priorizando subir batería",
-     "frio": "off_solar_low", "battery_goal": "Subiendo"},
+     "laptop": "💻 Laptop: solo si es imprescindible",
+     "nevera": "off_morning", "battery_goal": "Subiendo"},
     {"start": 9 * 60, "end": 15 * 60, "label": "9:00 AM–3:00 PM",
-     "laptop": "💻 Laptop: ventana principal, podés trabajar con ella enchufada",
-     "frio": "conditional", "battery_goal": "70–75% a las 3 PM"},
+     "laptop": "💻 Laptop: ON, ventana principal",
+     "nevera": "conditional_peak", "battery_goal": "65–75% a las 3 PM"},
     {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
-     "laptop": "💻 Laptop: solo si es necesario, frena la carga de la batería",
-     "frio": "off_brake", "battery_goal": "Mantener"},
+     "laptop": "💻 Laptop: solo si es necesario",
+     "nevera": "conditional_afternoon", "battery_goal": "Mantener"},
     {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
-     "laptop": "💻 Laptop: mejor apagada/desenchufada (de noche cuesta ~7-8%/h)",
-     "frio": "off_night_prep", "battery_goal": "70%+ al anochecer"},
+     "laptop": "💻 Laptop: OFF (de noche cuesta ~7-8%/h)",
+     "nevera": "off_night", "battery_goal": "70%+ al anochecer"},
 ]
-
-_STATIC_FRIO_LINES = {
-    "off_solar_low": "🧊 Frío/congelador: OFF (todavía priorizando subir batería antes de sumar carga)",
-    "off_brake": "🧊 Frío/congelador: OFF (frenando consumo para llegar a la meta de batería)",
-    "off_night_prep": "🧊 Frío/congelador: OFF (preparando batería para la noche)",
-}
 
 
 def _current_load_block(now=None) -> dict:
@@ -1104,39 +1098,41 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _peak_block_lines(pv_w, out_w) -> list:
-    """Frío y TV en el bloque de sol fuerte (9 AM-3 PM). Regla 1: si la salida
-    supera la entrada se apaga primero el frío y, si no alcanza, después la
-    TV — se estima si alcanza comparando el exceso contra los 140 W del frío."""
+def _frio_line(avg_soc) -> str:
+    """Regla 2: el frío es prioritario, se mantiene encendido siempre (hasta
+    de noche) salvo emergencia de batería por debajo del 15%."""
+    if avg_soc is not None and avg_soc < FRIO_EMERGENCY_THRESHOLD:
+        return f"🧊 Frío: EMERGENCIA — batería {avg_soc:.1f}%, apagar"
+    return "🧊 Frío: ON (prioritario)"
+
+
+def _nevera_and_tv_lines(nevera_mode: str, pv_w, out_w) -> list:
+    """Regla 1: si la salida supera la entrada se apaga primero la NEVERA y,
+    si no alcanza, después la TV (umbral: los 100 W de la nevera)."""
     pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
     out_str = f"{out_w} W" if out_w is not None else "N/D"
-    if pv_w is None or pv_w < FRIO_MIN_SOLAR_W:
-        return [
-            f"🧊 Frío/congelador: OFF — entrada solar {pv_str}, todavía no llega a los {FRIO_MIN_SOLAR_W} W mínimos",
-            "📺 TV: podés usarla igual (1 h), no depende del frío",
-        ]
-    excess = (out_w - pv_w) if out_w is not None else None
+    if nevera_mode == "off_morning":
+        return ["🥶 Nevera: OFF (aguantó la noche)", "📺 TV: OFF"]
+    if nevera_mode == "off_night":
+        return ["🥶 Nevera: OFF (se apaga de noche)", "📺 TV: OFF"]
+    excess = (out_w - pv_w) if (out_w is not None and pv_w is not None) else None
+    if nevera_mode == "conditional_afternoon":
+        if excess is not None and excess > 0:
+            return [f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: OFF"]
+        return [f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OFF"]
+    # conditional_peak (9 AM-3 PM), con TV en juego
     if excess is None or excess <= 0:
-        return [
-            f"🧊 Frío/congelador: ON — entrada {pv_str} ≥ {FRIO_MIN_SOLAR_W} W y hay margen (salida {out_str})",
-            "📺 TV: podés usarla, es la ventana ideal (1 h)",
-        ]
-    if excess <= FRIO_WATTS:
-        return [
-            f"🧊 Frío/congelador: APAGAR 30-40 min — salida {out_str} > entrada {pv_str}",
-            "📺 TV: con el frío apagado alcanza, se puede dejar",
-        ]
-    return [
-        f"🧊 Frío/congelador: APAGAR — salida {out_str} supera bastante la entrada {pv_str}",
-        "📺 TV: apagar también, con solo el frío no alcanza a cubrir la diferencia",
-    ]
+        return [f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OK, ventana ideal (1 h)"]
+    if excess <= NEVERA_WATTS:
+        return [f"🥶 Nevera: APAGAR 30-40 min (salida {out_str} > entrada {pv_str})", "📺 TV: OK, alcanza con la nevera"]
+    return [f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: apagar también"]
 
 
 def _powerbank_line(now) -> str:
     minute_of_day = now.hour * 60 + now.minute
     if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
-        return "🔋 Power bank: cargar ahora (franja fija 10 AM–2 PM)"
-    return "🔋 Power bank: OFF (solo se carga entre 10 AM y 2 PM)"
+        return "🔋 Power bank: cargar (10 AM–2 PM)"
+    return "🔋 Power bank: OFF"
 
 
 def build_load_advisor_message() -> str:
@@ -1148,17 +1144,14 @@ def build_load_advisor_message() -> str:
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
     lines = [
         f"🔆 *Gestión de cargas* · {block['label']}",
-        "✅ Nevera e Internet: ON (críticas, siempre)",
+        "✅ Internet: ON",
+        _frio_line(m["avg_soc"]),
         block["laptop"],
     ]
-    if block["frio"] == "conditional":
-        lines.extend(_peak_block_lines(m["pv_w"], m["out_w"]))
-    else:
-        lines.append(_STATIC_FRIO_LINES[block["frio"]])
-        lines.append("📺 TV: OFF (fuera de la franja ideal de la mañana/mediodía)")
+    lines.extend(_nevera_and_tv_lines(block["nevera"], m["pv_w"], m["out_w"]))
     lines.append(_powerbank_line(now))
     lines.append("")
-    lines.append(f"🎯 Objetivo de batería: {block['battery_goal']} (ahora: {avg_soc_str})")
+    lines.append(f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})")
     return "\n".join(lines)
 
 
@@ -1183,14 +1176,14 @@ def load_advisor_timer() -> None:
 # --- Alerta dinámica de proyección: a diferencia del mensaje de /cargas (que
 # describe el plan), esto analiza el ritmo de descarga actual y proyecta si la
 # batería va a llegar por debajo de la meta del próximo checkpoint del plan
-# (70-75% a las 3 PM, 70%+ al anochecer). Avisa ANTES de que pase, no cuando
+# (65-75% a las 3 PM, 70%+ al anochecer). Avisa ANTES de que pase, no cuando
 # ya se descontroló. Chequea más seguido que el mensaje de 30 min para
 # reaccionar rápido a caídas bruscas.
 PROJECTION_CHECK_MINUTES = 10
 PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
 BATTERY_CHECKPOINTS = [
-    (15 * 60, 70, "las 3:00 PM"),
-    (18 * 60 + 30, 70, "el anochecer (6:30 PM)"),
+    (15 * 60, 65, "las 3:00 PM"),
+    (18 * 60 + 30, 70, "el anochecer"),
 ]
 
 _projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se avisó ese checkpoint
@@ -1233,9 +1226,8 @@ def _check_battery_projection(now=None) -> None:
         if _projection_alerted_for.get(cp_min) != today:
             send_telegram(
                 "⚠️ *Se está yendo de control*\n"
-                f"Al ritmo actual ({round(m['system_net_w'])} W netos de descarga), proyecto "
-                f"*{projected:.0f}%* para {label} (meta: {floor}%+). Ahora estás en {m['avg_soc']:.1f}%.\n"
-                "Bajá carga (frío, TV, laptop) o vas a llegar corto."
+                f"Proyecto {projected:.0f}% para {label} (meta {floor}%+), vas en {m['avg_soc']:.1f}% "
+                f"descargando a {round(m['system_net_w'])} W. Bajá carga (nevera, TV, laptop)."
             )
             _projection_alerted_for[cp_min] = today
             log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
