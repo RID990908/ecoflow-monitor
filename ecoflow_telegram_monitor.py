@@ -390,6 +390,20 @@ def get_device_quota(sn: str) -> dict:
     return payload.get("data", {})
 
 
+def get_device_quota_cached(sn: str) -> dict:
+    """Lee el último dato que ya llegó por el canal push de MQTT (el
+    dispositivo empuja telemetría solo, sin que se le pida), sin pedir un
+    refresh activo ni esperar. Para el dashboard, que puede consultar cada
+    1-5s sin golpear la conexión MQTT con un pedido nuevo cada vez."""
+    if not USE_PRIVATE_API:
+        return get_device_quota(sn)
+    with _mqtt_cache_lock:
+        entry = _device_cache.get(sn)
+        if entry and entry.get("quota"):
+            return entry["quota"]
+    raise RuntimeError("Todavía no llegó ningún dato del dispositivo por MQTT")
+
+
 def get_device_online(sn: str) -> bool:
     if USE_PRIVATE_API:
         # El campo "online" solo llega en la respuesta a un pedido explícito
@@ -580,11 +594,13 @@ def _last_ac_line() -> str:
     return f"⚡ Última vez que llegó corriente: hace {_format_elapsed(time.time() - LAST_AC_TIMESTAMP)}"
 
 
-def _gather_metrics() -> dict:
+def _gather_metrics(passive: bool = False) -> dict:
     """Junta y deriva todos los datos de un vistazo: la usan tanto el informe
     de Telegram como el dashboard web, para no duplicar la lógica de campos
-    confiables/no confiables que costó tanto afinar."""
-    data = get_device_quota(SN_DELTA2)
+    confiables/no confiables que costó tanto afinar. passive=True lee el
+    caché sin pedir un refresh activo (para el dashboard, que consulta muy
+    seguido)."""
+    data = get_device_quota_cached(SN_DELTA2) if passive else get_device_quota(SN_DELTA2)
 
     soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
@@ -1017,7 +1033,7 @@ def get_dashboard_status() -> dict:
     if not ECOFLOW_READY:
         return {"ready": False, "error": "EcoFlow todavía no está configurado"}
     try:
-        m = _gather_metrics()
+        m = _gather_metrics(passive=True)
     except Exception as exc:
         return {"ready": False, "error": str(exc)}
 
@@ -1257,7 +1273,7 @@ DASHBOARD_HTML = """<!doctype html>
       }
     }
     refresh();
-    setInterval(refresh, 10000);
+    setInterval(refresh, 1000);
   </script>
 </body>
 </html>
