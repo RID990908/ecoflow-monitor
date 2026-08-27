@@ -14,7 +14,6 @@ Variables de entorno requeridas:
   ECOFLOW_SN_EXTRA     Número de serie de la batería extra (opcional)
   TELEGRAM_BOT_TOKEN   Token del bot (de @BotFather)
   TELEGRAM_CHAT_ID     Chat ID destino (de @userinfobot)
-  INTERVAL_HOURS       Intervalo del informe periódico en horas (default: 1)
   AC_CHECK_MINUTES     Cada cuánto chequear si empezó a cargar por AC (default: 1)
 
 Uso:
@@ -65,7 +64,6 @@ SN_DELTA2 = os.environ.get("ECOFLOW_SN_DELTA2", "").strip()
 SN_EXTRA = os.environ.get("ECOFLOW_SN_EXTRA", "").strip()
 BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
-INTERVAL_HOURS = float(os.environ.get("INTERVAL_HOURS", "1"))
 AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "1"))
 AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
 
@@ -74,6 +72,12 @@ AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por
 # verano de Cuba automáticamente.
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Havana"))
 DAILY_SUMMARY_HOUR = int(os.environ.get("DAILY_SUMMARY_HOUR", "22"))
+
+# Horario silencioso: de noche no tiene sentido recibir el informe automático
+# cada media hora. Las alertas (llegó/se fue la luz, batería baja/llena) siguen
+# funcionando igual, solo se pausa el informe periódico.
+QUIET_HOUR_START = int(os.environ.get("QUIET_HOUR_START", "22"))
+QUIET_HOUR_END = int(os.environ.get("QUIET_HOUR_END", "6"))
 
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
@@ -575,6 +579,7 @@ def build_report() -> str:
 
     # 2. Flujo de energía
     lines.append("🔄 *Flujo de energía*")
+    lines.append(f"📥 Entrada total: {total_in_w} W")
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"📤 Salida: {out_w} W")
     if remain_min:
@@ -614,12 +619,14 @@ HELP_TEXT = (
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
-    f"Informe automático cada {INTERVAL_HOURS:g}h · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
+    f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_HOUR_START:02d}:00 a "
+    f"{QUIET_HOUR_END:02d}:00) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
     "También te aviso al llegar a 100% de carga."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
-    f"Te mando un informe automático cada {INTERVAL_HOURS:g}h y te aviso apenas empiece a cargar "
+    f"Te mando un informe automático a las :00 y :30 de cada hora (pausado de noche, de "
+    f"{QUIET_HOUR_START:02d}:00 a {QUIET_HOUR_END:02d}:00) y te aviso apenas empiece a cargar "
     "por corriente.\n\n" + HELP_TEXT
 )
 
@@ -674,17 +681,67 @@ def poll_commands() -> None:
             time.sleep(5)
 
 
+def _seconds_until_next_slot() -> float:
+    """Próximo :00 o :30 en punto (hora local), para que el informe automático
+    llegue siempre en esos horarios en vez de a minutos sueltos según cuándo
+    arrancó el contenedor."""
+    now = datetime.now(TZ)
+    if now.minute < 30:
+        next_slot = now.replace(minute=30, second=0, microsecond=0)
+    else:
+        next_slot = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    return (next_slot - now).total_seconds()
+
+
+def _in_quiet_hours(now=None) -> bool:
+    now = now or datetime.now(TZ)
+    if QUIET_HOUR_START > QUIET_HOUR_END:  # el rango cruza la medianoche
+        return now.hour >= QUIET_HOUR_START or now.hour < QUIET_HOUR_END
+    return QUIET_HOUR_START <= now.hour < QUIET_HOUR_END
+
+
 def report_timer() -> None:
     while True:
-        time.sleep(INTERVAL_HOURS * 3600)
+        time.sleep(_seconds_until_next_slot())
         if not ECOFLOW_READY:
             log.info("Informe automático omitido (EcoFlow no configurado)")
+            continue
+        if _in_quiet_hours():
+            log.info("Informe automático omitido (horario silencioso)")
             continue
         try:
             send_telegram(build_report())
             log.info("Informe periódico enviado")
         except Exception:
             log.exception("Fallo enviando el informe periódico")
+
+
+_quiet_mode_active = False
+
+
+def quiet_hours_timer() -> None:
+    """Avisa al entrar y salir del horario silencioso, para que quede claro
+    que el informe automático se pausó a propósito y no por una falla."""
+    global _quiet_mode_active
+    while True:
+        time.sleep(300)
+        if not ECOFLOW_READY:
+            continue
+        now_quiet = _in_quiet_hours()
+        try:
+            if now_quiet and not _quiet_mode_active:
+                send_telegram(
+                    f"🌙 Entrando en horario silencioso ({QUIET_HOUR_START:02d}:00–{QUIET_HOUR_END:02d}:00): "
+                    f"pauso los informes automáticos hasta las {QUIET_HOUR_END:02d}:00. Las alertas siguen activas."
+                )
+                _quiet_mode_active = True
+                log.info("Horario silencioso activado")
+            elif not now_quiet and _quiet_mode_active:
+                send_telegram("☀️ Salgo del horario silencioso, retoman los informes automáticos.")
+                _quiet_mode_active = False
+                log.info("Horario silencioso desactivado")
+        except Exception:
+            log.exception("Error en el aviso de horario silencioso")
 
 
 FULL_CHARGE_THRESHOLD = 99  # % a partir del cual se considera "carga completa"
@@ -821,10 +878,16 @@ def main() -> None:
     threading.Thread(target=ac_check_timer, daemon=True).start()
     threading.Thread(target=watchdog_timer, daemon=True).start()
     threading.Thread(target=daily_summary_timer, daemon=True).start()
+    threading.Thread(target=quiet_hours_timer, daemon=True).start()
     if USE_PRIVATE_API:
         threading.Thread(target=start_private_mqtt, daemon=True).start()
 
-    log.info("Monitor iniciado. Informe cada %.1fh, chequeo AC cada %.1f min.", INTERVAL_HOURS, AC_CHECK_MINUTES)
+    log.info(
+        "Monitor iniciado. Informe a las :00/:30 (pausado %02d:00-%02d:00), chequeo AC cada %.1f min.",
+        QUIET_HOUR_START,
+        QUIET_HOUR_END,
+        AC_CHECK_MINUTES,
+    )
     while True:
         time.sleep(3600)
 
