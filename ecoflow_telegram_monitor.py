@@ -523,6 +523,23 @@ def _combined_line(soc_delta2, soc_extra, system_net_w) -> str:
     return f"{emoji} *Total del sistema*: *{avg:.1f}%*"
 
 
+BATTERY_CAPACITY_WH = 1024  # Delta 2 y la batería extra son 1024Wh cada una
+
+
+def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
+    """Estimación lineal (mismo criterio que pd.remainTime del propio
+    dispositivo) de cuánto falta para que la carga llegue al umbral de
+    batería baja configurado con /alerta."""
+    if soc is None or net_w is None or net_w >= -NOISE_FLOOR_W or soc <= threshold:
+        return ""
+    capacity_wh = BATTERY_CAPACITY_WH * num_batteries
+    energy_to_burn_wh = capacity_wh * (soc - threshold) / 100
+    hours = energy_to_burn_wh / (-net_w)
+    eta = datetime.now(TZ) + timedelta(hours=hours)
+    h, m = divmod(int(round(hours * 60)), 60)
+    return f"🪫 ~{h}h {m}m para llegar al {threshold}% (a las {eta.strftime('%H:%M')})"
+
+
 def _format_elapsed(seconds: float) -> str:
     seconds = max(0, int(seconds))
     hours, rem = divmod(seconds, 3600)
@@ -600,6 +617,13 @@ def build_report() -> str:
         eta = datetime.now(TZ) + timedelta(minutes=abs(int(remain_min)))
         eta_verb = "vas a estar full a las" if charging_up else "dura hasta las"
         lines.append(f"⏱ ~{hours}h {minutes}m {verb} ({eta_verb} {eta.strftime('%H:%M')})")
+    if soc_extra is not None:
+        avg_soc = (soc_delta2 + soc_extra) / 2 if soc_delta2 is not None else None
+        threshold_line = _time_to_threshold_line(avg_soc, system_net_w, 2, 20)
+    else:
+        threshold_line = _time_to_threshold_line(soc_delta2, delta2_net_w, 1, 20)
+    if threshold_line:
+        lines.append(threshold_line)
     lines.append("")
 
     # 3. Puertos (solo si hay algo conectado)
