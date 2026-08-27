@@ -1167,13 +1167,6 @@ DASHBOARD_HTML = """<!doctype html>
   .chart-wrap { width: 100%; max-width: 380px; margin-top: 16px; }
   .chart-wrap .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .chart-wrap svg { width: 100%; height: 90px; background: #141b22; border-radius: 14px; }
-  .notif-btn {
-    margin-top: 16px; width: 100%; max-width: 380px; padding: 12px; border-radius: 12px;
-    border: none; background: #141b22; color: #cbd5e1; font-size: 14px;
-    transition: background-color 200ms var(--ease-out), transform 160ms var(--ease-out);
-  }
-  .notif-btn:active { transform: scale(0.97); }
-  .notif-btn.enabled { background: #14351f; color: #4ade80; }
   .port-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
   .port-row span:last-child { font-variant-numeric: tabular-nums; }
   .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
@@ -1238,8 +1231,6 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="title">Puertos activos</div>
     <div id="ports"></div>
   </div>
-
-  <button class="notif-btn" id="notif-btn" style="display:none">🔔 Activar avisos en esta pantalla</button>
 
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
@@ -1340,7 +1331,6 @@ DASHBOARD_HTML = """<!doctype html>
 
         document.getElementById('live-dot').classList.remove('stale');
         lastSuccessAt = Date.now();
-        maybeNotify(d);
       } catch (e) {
         document.getElementById('live-dot').classList.add('stale');
       }
@@ -1363,45 +1353,6 @@ DASHBOARD_HTML = """<!doctype html>
       } else {
         updatedText.textContent = `Desactualizado hace ${Math.round(secs / 60)}m`;
       }
-    }
-
-    // Avisos en pantalla (mientras esta pestaña esté abierta) cuando cruza el
-    // 20% o cuando llega/se va la corriente. No es push real: si cerrás la
-    // página no llega nada — para eso ya está Telegram.
-    let notifsEnabled = false;
-    let prevHasAc = null;
-    let prevBelowThreshold = null;
-    function maybeNotify(d) {
-      if (!notifsEnabled || d.percent == null) return;
-      const belowThreshold = d.percent <= 20;
-      if (prevBelowThreshold === false && belowThreshold) {
-        new Notification('🪫 Batería baja', { body: `Carga en ${d.percent.toFixed(1)}%` });
-      }
-      if (prevHasAc === false && d.has_ac) {
-        new Notification('⚡ Llegó la corriente', { body: `${d.ac_w} W` });
-      } else if (prevHasAc === true && !d.has_ac) {
-        new Notification('🔌⚠️ Se fue la luz', { body: 'Dejó de cargar por AC' });
-      }
-      prevHasAc = d.has_ac;
-      prevBelowThreshold = belowThreshold;
-    }
-
-    const notifBtn = document.getElementById('notif-btn');
-    if ('Notification' in window) {
-      notifBtn.style.display = 'block';
-      if (Notification.permission === 'granted') {
-        notifsEnabled = true;
-        notifBtn.textContent = '🔔 Avisos activados en esta pantalla';
-        notifBtn.classList.add('enabled');
-      }
-      notifBtn.addEventListener('click', async () => {
-        const perm = await Notification.requestPermission();
-        if (perm === 'granted') {
-          notifsEnabled = true;
-          notifBtn.textContent = '🔔 Avisos activados en esta pantalla';
-          notifBtn.classList.add('enabled');
-        }
-      });
     }
 
     async function refreshHistory() {
