@@ -699,7 +699,7 @@ def _format_report(m: dict) -> str:
     elif m["remain"]:
         r = m["remain"]
         verb = "para llenarse" if r["charging_up"] else "de autonomía"
-        eta_verb = "vas a estar llena a las" if r["charging_up"] else "dura hasta las"
+        eta_verb = "lleno a las" if r["charging_up"] else "dura hasta las"
         lines.append(f"⏱ ~{r['hours']}h {r['minutes']}m {verb} ({eta_verb} {r['eta']})")
     if m["threshold_line"]:
         lines.append(m["threshold_line"])
