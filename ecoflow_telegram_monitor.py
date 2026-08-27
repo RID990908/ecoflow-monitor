@@ -1068,7 +1068,7 @@ def daily_summary_timer() -> None:
 # no aparece en el mensaje porque no hay ninguna decisión que tomar con él.
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 19 * 60 + 30  # a veces entra algo de sol hasta las 7:30 PM
-FRIO_EMERGENCY_THRESHOLD = 15  # regla 2: el frío solo se apaga en emergencia (<15%)
+FRIO_EMERGENCY_THRESHOLD = 25  # regla 2: el frío solo se apaga en emergencia (<25%)
 NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
 POWERBANK_START_MIN = 10 * 60
 POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
