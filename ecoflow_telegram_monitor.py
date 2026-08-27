@@ -748,7 +748,9 @@ HELP_TEXT = (
     "También te aviso al llegar a 100% de carga.\n\n"
     "🔆 Además, de 6:00 AM a 6:30 PM te mando cada media hora qué debería estar "
     "encendido/apagado (laptop, frío, TV, power bank) según el plan y si conviene "
-    "apagar el frío o la TV porque el consumo supera la entrada solar."
+    "apagar el frío o la TV porque el consumo supera la entrada solar.\n\n"
+    "⚠️ Y si el ritmo de descarga actual proyecta que vas a llegar por debajo de la "
+    "meta de batería (70-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
@@ -1178,6 +1180,80 @@ def load_advisor_timer() -> None:
             log.exception("Fallo enviando el mensaje de gestión de cargas")
 
 
+# --- Alerta dinámica de proyección: a diferencia del mensaje de /cargas (que
+# describe el plan), esto analiza el ritmo de descarga actual y proyecta si la
+# batería va a llegar por debajo de la meta del próximo checkpoint del plan
+# (70-75% a las 3 PM, 70%+ al anochecer). Avisa ANTES de que pase, no cuando
+# ya se descontroló. Chequea más seguido que el mensaje de 30 min para
+# reaccionar rápido a caídas bruscas.
+PROJECTION_CHECK_MINUTES = 10
+PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
+BATTERY_CHECKPOINTS = [
+    (15 * 60, 70, "las 3:00 PM"),
+    (18 * 60 + 30, 70, "el anochecer (6:30 PM)"),
+]
+
+_projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se avisó ese checkpoint
+
+
+def _next_checkpoint(now):
+    minute_of_day = now.hour * 60 + now.minute
+    for cp_min, floor, label in BATTERY_CHECKPOINTS:
+        if minute_of_day < cp_min:
+            return cp_min, floor, label
+    return None
+
+
+def _check_battery_projection(now=None) -> None:
+    """Un chequeo: proyecta el %SOC en el próximo checkpoint con el ritmo de
+    descarga actual y avisa (una vez por checkpoint/día, con rearme si se
+    recupera) si va a quedar por debajo de la meta menos el margen."""
+    now = now or datetime.now(TZ)
+    minute_of_day = now.hour * 60 + now.minute
+    if not (LOAD_ADVISOR_START_MIN <= minute_of_day < LOAD_ADVISOR_END_MIN):
+        return
+    cp = _next_checkpoint(now)
+    if cp is None:
+        return
+    cp_min, floor, label = cp
+    m = _gather_metrics()
+    if m["avg_soc"] is None or m["system_net_w"] is None:
+        return
+    today = now.date()
+    if m["system_net_w"] >= -NOISE_FLOOR_W:
+        # no está descargando neto ahora mismo: sin riesgo, se puede rearmar
+        # la alerta si se había disparado antes y se recuperó
+        if _projection_alerted_for.get(cp_min) == today:
+            del _projection_alerted_for[cp_min]
+        return
+    hours_left = (cp_min - minute_of_day) / 60
+    capacity_wh = BATTERY_CAPACITY_WH * 2
+    projected = m["avg_soc"] + (m["system_net_w"] * hours_left) / capacity_wh * 100
+    if projected < floor - PROJECTION_ALERT_MARGIN:
+        if _projection_alerted_for.get(cp_min) != today:
+            send_telegram(
+                "⚠️ *Se está yendo de control*\n"
+                f"Al ritmo actual ({round(m['system_net_w'])} W netos de descarga), proyecto "
+                f"*{projected:.0f}%* para {label} (meta: {floor}%+). Ahora estás en {m['avg_soc']:.1f}%.\n"
+                "Bajá carga (frío, TV, laptop) o vas a llegar corto."
+            )
+            _projection_alerted_for[cp_min] = today
+            log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
+    elif _projection_alerted_for.get(cp_min) == today:
+        del _projection_alerted_for[cp_min]
+
+
+def battery_projection_timer() -> None:
+    while True:
+        time.sleep(PROJECTION_CHECK_MINUTES * 60)
+        if not ECOFLOW_READY:
+            continue
+        try:
+            _check_battery_projection()
+        except Exception:
+            log.exception("Error en el chequeo de proyección de batería")
+
+
 # --- Dashboard web: la misma info que el bot, en vivo, sin tener que pedirla ---
 PORT = int(os.environ.get("PORT", "8080"))
 
@@ -1576,6 +1652,7 @@ def main() -> None:
     threading.Thread(target=poll_commands, daemon=True).start()
     threading.Thread(target=report_timer, daemon=True).start()
     threading.Thread(target=load_advisor_timer, daemon=True).start()
+    threading.Thread(target=battery_projection_timer, daemon=True).start()
     threading.Thread(target=ac_check_timer, daemon=True).start()
     threading.Thread(target=watchdog_timer, daemon=True).start()
     threading.Thread(target=daily_summary_timer, daemon=True).start()
