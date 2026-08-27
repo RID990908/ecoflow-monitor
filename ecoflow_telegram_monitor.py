@@ -557,7 +557,7 @@ def build_report() -> str:
     lines = [f"📊 *Informe EcoFlow* · Cargando por {source_emoji}", ""]
 
     # 1. Datos del sistema (lo más importante: cuánta carga queda)
-    lines.append("🔋 *Datos del sistema*")
+    lines.append("📋 *Datos del sistema*")
     delta2_emoji, delta2_label, delta2_suffix = _battery_flow_emoji(delta2_net_w)
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
     lines.append(f"{delta2_emoji} Delta 2 — {delta2_label}: *{soc_delta2_str}%*{delta2_suffix}")
