@@ -743,7 +743,10 @@ HELP_TEXT = (
     "/help — ver esta ayuda\n\n"
     f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
     f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
-    "También te aviso al llegar a 100% de carga."
+    "También te aviso al llegar a 100% de carga.\n\n"
+    "🔆 Además, de 6:00 AM a 6:30 PM te mando cada media hora qué debería estar "
+    "encendido/apagado (laptop, frío, TV, power bank) según el plan y si conviene "
+    "apagar el frío o la TV porque el consumo supera la entrada solar."
 )
 START_TEXT = (
     "👋 Hola, soy el monitor de tu EcoFlow.\n"
@@ -1043,6 +1046,126 @@ def daily_summary_timer() -> None:
             log.info("Resumen diario enviado (%.0f Wh solar, %.0f Wh consumido)", solar_wh, consumed_wh)
         except Exception:
             log.exception("Error mandando el resumen diario")
+
+
+# --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
+# 18:30, que dice qué debería estar encendido/apagado según el bloque horario
+# del plan (nevera/internet/ventilador siempre libres, laptop/frío/TV/power
+# bank condicionados) y si el consumo actual está superando la entrada solar.
+# El ventilador no aparece en el mensaje: está "libre" en todos los bloques,
+# no hay ninguna decisión que tomar con él.
+LOAD_ADVISOR_START_MIN = 6 * 60
+LOAD_ADVISOR_END_MIN = 18 * 60 + 30
+FRIO_MIN_SOLAR_W = 250  # regla 2: el frío solo se enciende con >250 W de entrada
+FRIO_WATTS = 140  # para estimar si apagar el frío alcanza para cubrir el exceso de salida
+POWERBANK_START_MIN = 10 * 60
+POWERBANK_END_MIN = 14 * 60  # regla 4: power bank siempre en 10 AM-2 PM, nunca de noche
+
+_LOAD_SCHEDULE = [
+    {"start": 6 * 60, "end": 9 * 60, "label": "6:00–9:00 AM",
+     "laptop": "💻 Laptop: solo si es imprescindible, todavía priorizando subir batería",
+     "frio": "off_solar_low", "battery_goal": "Subiendo"},
+    {"start": 9 * 60, "end": 15 * 60, "label": "9:00 AM–3:00 PM",
+     "laptop": "💻 Laptop: ventana principal, podés trabajar con ella enchufada",
+     "frio": "conditional", "battery_goal": "70–75% a las 3 PM"},
+    {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
+     "laptop": "💻 Laptop: solo si es necesario, frena la carga de la batería",
+     "frio": "off_brake", "battery_goal": "Mantener"},
+    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
+     "laptop": "💻 Laptop: mejor apagada/desenchufada (de noche cuesta ~7-8%/h)",
+     "frio": "off_night_prep", "battery_goal": "70%+ al anochecer"},
+]
+
+_STATIC_FRIO_LINES = {
+    "off_solar_low": "🧊 Frío/congelador: OFF (todavía priorizando subir batería antes de sumar carga)",
+    "off_brake": "🧊 Frío/congelador: OFF (frenando consumo para llegar a la meta de batería)",
+    "off_night_prep": "🧊 Frío/congelador: OFF (preparando batería para la noche)",
+}
+
+
+def _current_load_block(now=None) -> dict:
+    now = now or datetime.now(TZ)
+    minute_of_day = now.hour * 60 + now.minute
+    for block in _LOAD_SCHEDULE:
+        if block["start"] <= minute_of_day < block["end"]:
+            return block
+    return None
+
+
+def _peak_block_lines(pv_w, out_w) -> list:
+    """Frío y TV en el bloque de sol fuerte (9 AM-3 PM). Regla 1: si la salida
+    supera la entrada se apaga primero el frío y, si no alcanza, después la
+    TV — se estima si alcanza comparando el exceso contra los 140 W del frío."""
+    pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
+    out_str = f"{out_w} W" if out_w is not None else "N/D"
+    if pv_w is None or pv_w < FRIO_MIN_SOLAR_W:
+        return [
+            f"🧊 Frío/congelador: OFF — entrada solar {pv_str}, todavía no llega a los {FRIO_MIN_SOLAR_W} W mínimos",
+            "📺 TV: podés usarla igual (1 h), no depende del frío",
+        ]
+    excess = (out_w - pv_w) if out_w is not None else None
+    if excess is None or excess <= 0:
+        return [
+            f"🧊 Frío/congelador: ON — entrada {pv_str} ≥ {FRIO_MIN_SOLAR_W} W y hay margen (salida {out_str})",
+            "📺 TV: podés usarla, es la ventana ideal (1 h)",
+        ]
+    if excess <= FRIO_WATTS:
+        return [
+            f"🧊 Frío/congelador: APAGAR 30-40 min — salida {out_str} > entrada {pv_str}",
+            "📺 TV: con el frío apagado alcanza, se puede dejar",
+        ]
+    return [
+        f"🧊 Frío/congelador: APAGAR — salida {out_str} supera bastante la entrada {pv_str}",
+        "📺 TV: apagar también, con solo el frío no alcanza a cubrir la diferencia",
+    ]
+
+
+def _powerbank_line(now) -> str:
+    minute_of_day = now.hour * 60 + now.minute
+    if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
+        return "🔋 Power bank: cargar ahora (franja fija 10 AM–2 PM)"
+    return "🔋 Power bank: OFF (solo se carga entre 10 AM y 2 PM)"
+
+
+def build_load_advisor_message() -> str:
+    block = _current_load_block()
+    if block is None:
+        return ""
+    now = datetime.now(TZ)
+    m = _gather_metrics()
+    avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
+    lines = [
+        f"🔆 *Gestión de cargas* · {block['label']}",
+        "✅ Nevera e Internet: ON (críticas, siempre)",
+        block["laptop"],
+    ]
+    if block["frio"] == "conditional":
+        lines.extend(_peak_block_lines(m["pv_w"], m["out_w"]))
+    else:
+        lines.append(_STATIC_FRIO_LINES[block["frio"]])
+        lines.append("📺 TV: OFF (fuera de la franja ideal de la mañana/mediodía)")
+    lines.append(_powerbank_line(now))
+    lines.append("")
+    lines.append(f"🎯 Objetivo de batería: {block['battery_goal']} (ahora: {avg_soc_str})")
+    return "\n".join(lines)
+
+
+def load_advisor_timer() -> None:
+    while True:
+        time.sleep(_seconds_until_next_slot())
+        if not ECOFLOW_READY:
+            continue
+        now = datetime.now(TZ)
+        minute_of_day = now.hour * 60 + now.minute
+        if not (LOAD_ADVISOR_START_MIN <= minute_of_day < LOAD_ADVISOR_END_MIN):
+            continue
+        try:
+            msg = build_load_advisor_message()
+            if msg:
+                send_telegram(msg)
+                log.info("Mensaje de gestión de cargas enviado")
+        except Exception:
+            log.exception("Fallo enviando el mensaje de gestión de cargas")
 
 
 # --- Dashboard web: la misma info que el bot, en vivo, sin tener que pedirla ---
@@ -1442,6 +1565,7 @@ def main() -> None:
 
     threading.Thread(target=poll_commands, daemon=True).start()
     threading.Thread(target=report_timer, daemon=True).start()
+    threading.Thread(target=load_advisor_timer, daemon=True).start()
     threading.Thread(target=ac_check_timer, daemon=True).start()
     threading.Thread(target=watchdog_timer, daemon=True).start()
     threading.Thread(target=daily_summary_timer, daemon=True).start()
