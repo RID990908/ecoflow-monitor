@@ -1004,9 +1004,14 @@ def get_dashboard_status() -> dict:
     percent = m["avg_soc"] if m["avg_soc"] is not None else m["soc_delta2"]
 
     eta_text = None
+    remain_duration = None
     if m["remain"]:
         r = m["remain"]
         eta_text = f"Full a las {r['eta']}" if r["charging_up"] else f"Dura hasta las {r['eta']}"
+        remain_duration = f"{r['hours']}h {r['minutes']}m"
+
+    extra_in_w = m["extra_net_w"] if m["extra_net_w"] and m["extra_net_w"] > 0 else 0
+    extra_out_w = -m["extra_net_w"] if m["extra_net_w"] and m["extra_net_w"] < 0 else 0
 
     return {
         "ready": True,
@@ -1015,12 +1020,15 @@ def get_dashboard_status() -> dict:
         "soc_extra": m["soc_extra"],
         "source_verb": m["source_verb"],
         "source_emoji": m["source_emoji"],
-        "pv_w": m["pv_w"],
-        "ac_w": m["ac_w"],
+        "pv_w": m["pv_w"] or 0,
+        "ac_w": m["ac_w"] or 0,
+        "extra_in_w": round(extra_in_w),
+        "extra_out_w": round(extra_out_w),
         "has_ac": m["has_ac"],
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],
         "eta_text": eta_text,
+        "remain_duration": remain_duration,
         "threshold_text": m["threshold_line"] or None,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         "ports": m["ports"],
@@ -1037,12 +1045,37 @@ DASHBOARD_HTML = """<!doctype html>
 <style>
   * { box-sizing: border-box; }
   body {
-    margin: 0; min-height: 100vh; background: #0b0f14; color: #f5f5f5;
+    margin: 0; min-height: 100vh; background: #000; color: #f5f5f5;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    display: flex; flex-direction: column; align-items: center; padding: 24px 16px 60px;
+    display: flex; flex-direction: column; align-items: center; padding: 20px 16px 50px;
   }
-  .header { font-size: 15px; color: #9aa4af; margin-bottom: 18px; text-align: center; }
-  .ring-wrap { position: relative; width: 260px; height: 260px; margin-bottom: 10px; }
+  .header {
+    width: 100%; max-width: 380px; display: flex; justify-content: space-between;
+    align-items: center; font-size: 15px; color: #cbd5e1; margin-bottom: 22px;
+  }
+  .io-row {
+    width: 100%; max-width: 380px; display: flex; justify-content: space-between; margin-bottom: 18px;
+  }
+  .io-col .io-label { font-size: 13px; }
+  .io-col .io-value { font-size: 30px; font-weight: 700; margin-top: 2px; }
+  .io-col.in .io-label { color: #4ade80; }
+  .io-col.out .io-label { color: #fb923c; }
+  .io-col.out { text-align: right; }
+  .icons-row { width: 100%; max-width: 380px; display: flex; justify-content: space-around; margin-bottom: 4px; }
+  .icon-item { display: flex; flex-direction: column; align-items: center; width: 72px; }
+  .icon-circle {
+    width: 52px; height: 52px; border-radius: 50%; background: #1c232b;
+    display: flex; align-items: center; justify-content: center; font-size: 22px;
+  }
+  .icon-watts { font-size: 12px; color: #9aa4af; margin-top: 5px; }
+  .connector { width: 100%; max-width: 380px; height: 22px; position: relative; margin-bottom: 2px; }
+  .connector::before {
+    content: ""; position: absolute; left: 12%; right: 12%; top: 0; height: 1px; background: #2a333d;
+  }
+  .connector span {
+    position: absolute; top: 0; width: 1px; height: 22px; background: #2a333d;
+  }
+  .ring-wrap { position: relative; width: 240px; height: 240px; margin: 6px 0 8px; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
@@ -1050,26 +1083,19 @@ DASHBOARD_HTML = """<!doctype html>
     transition: background 0.6s ease;
   }
   .ring-inner {
-    width: 78%; height: 78%; border-radius: 50%; background: #0b0f14;
+    width: 80%; height: 80%; border-radius: 50%; background: #000;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
   }
-  .pct { font-size: 52px; font-weight: 700; line-height: 1; }
-  .pct-sub { font-size: 13px; color: #9aa4af; margin-top: 6px; }
+  .pct { font-size: 48px; font-weight: 700; line-height: 1; }
+  .pct-sub { font-size: 13px; color: #9aa4af; margin-top: 8px; }
+  .pct-sub .dur { font-size: 15px; color: #e5e7eb; font-weight: 600; margin-top: 2px; }
   .eta-box {
-    margin-top: 6px; padding: 14px 22px; border-radius: 16px; background: #141b22;
-    text-align: center; max-width: 340px;
+    margin-top: 4px; padding: 14px 22px; border-radius: 16px; background: #141b22;
+    text-align: center; max-width: 340px; width: 100%;
   }
   .eta-box .eta-main { font-size: 22px; font-weight: 700; color: #4ade80; }
   .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; }
-  .stats-row {
-    display: flex; gap: 12px; margin-top: 20px; width: 100%; max-width: 380px;
-  }
-  .stat-card {
-    flex: 1; background: #141b22; border-radius: 14px; padding: 12px; text-align: center;
-  }
-  .stat-card .label { font-size: 12px; color: #9aa4af; }
-  .stat-card .value { font-size: 20px; font-weight: 700; margin-top: 4px; }
-  .batteries { width: 100%; max-width: 380px; margin-top: 14px; }
+  .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
   .battery-row {
     display: flex; justify-content: space-between; align-items: center;
     background: #141b22; border-radius: 14px; padding: 12px 16px; margin-top: 8px;
@@ -1080,28 +1106,44 @@ DASHBOARD_HTML = """<!doctype html>
   .ports .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .port-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
   .updated { margin-top: 22px; font-size: 12px; color: #5b6670; }
-  .error { color: #f87171; margin-top: 40px; text-align: center; }
 </style>
 </head>
 <body>
-  <div class="header" id="header">Cargando…</div>
+  <div class="header">
+    <span id="header-left">Cargando…</span>
+    <span id="header-right"></span>
+  </div>
+
+  <div class="io-row">
+    <div class="io-col in"><div class="io-label">Entrada</div><div class="io-value" id="in-w">-- W</div></div>
+    <div class="io-col out"><div class="io-label">Salida</div><div class="io-value" id="out-w">-- W</div></div>
+  </div>
+
+  <div class="icons-row">
+    <div class="icon-item"><div class="icon-circle">🔌</div><div class="icon-watts" id="ac-w">0 W</div></div>
+    <div class="icon-item"><div class="icon-circle">☀️</div><div class="icon-watts" id="pv-w">0 W</div></div>
+    <div class="icon-item"><div class="icon-circle">🔋</div><div class="icon-watts" id="extra-in-w">0 W</div></div>
+  </div>
+
   <div class="ring-wrap">
     <div class="ring" id="ring">
       <div class="ring-inner">
         <div class="pct" id="pct">--%</div>
-        <div class="pct-sub" id="pct-sub"></div>
+        <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
       </div>
     </div>
   </div>
+
+  <div class="icons-row">
+    <div class="icon-item"><div class="icon-circle">📤</div><div class="icon-watts" id="out-total-w">0 W</div></div>
+    <div class="icon-item"><div class="icon-circle">🔋</div><div class="icon-watts" id="extra-out-w">0 W</div></div>
+  </div>
+
   <div class="eta-box" id="eta-box" style="display:none">
     <div class="eta-main" id="eta-main"></div>
     <div class="eta-sub" id="eta-sub"></div>
   </div>
-  <div class="stats-row">
-    <div class="stat-card"><div class="label">Entrada</div><div class="value" id="in-w">-- W</div></div>
-    <div class="stat-card"><div class="label">Salida</div><div class="value" id="out-w">-- W</div></div>
-    <div class="stat-card"><div class="label">Corriente</div><div class="value" id="ac">--</div></div>
-  </div>
+
   <div class="batteries" id="batteries"></div>
   <div class="ports" id="ports-wrap" style="display:none">
     <div class="title">Puertos activos</div>
@@ -1114,17 +1156,18 @@ DASHBOARD_HTML = """<!doctype html>
         const res = await fetch('/api/status');
         const d = await res.json();
         if (!d.ready) {
-          document.getElementById('header').textContent = d.error || 'No listo todavía';
+          document.getElementById('header-left').textContent = d.error || 'No listo todavía';
           return;
         }
-        document.getElementById('header').textContent = d.source_verb + ' ' + d.source_emoji;
+        document.getElementById('header-left').textContent = d.source_verb + ' ' + d.source_emoji;
+        document.getElementById('header-right').textContent = d.has_ac ? '🔌 Con corriente' : '';
 
         const pct = d.percent != null ? d.percent : 0;
         const ring = document.getElementById('ring');
         ring.style.setProperty('--pct', pct);
         ring.style.setProperty('--ring-color', pct <= 20 ? '#ef4444' : '#22c55e');
         document.getElementById('pct').textContent = (d.percent != null ? d.percent.toFixed(1) : '--') + '%';
-        document.getElementById('pct-sub').textContent = 'Total del sistema';
+        document.getElementById('dur').textContent = d.remain_duration || '--';
 
         const etaBox = document.getElementById('eta-box');
         if (d.eta_text) {
@@ -1137,7 +1180,11 @@ DASHBOARD_HTML = """<!doctype html>
 
         document.getElementById('in-w').textContent = d.in_w + ' W';
         document.getElementById('out-w').textContent = d.out_w + ' W';
-        document.getElementById('ac').textContent = d.has_ac ? 'Sí' : 'No';
+        document.getElementById('ac-w').textContent = d.ac_w + ' W';
+        document.getElementById('pv-w').textContent = d.pv_w + ' W';
+        document.getElementById('extra-in-w').textContent = d.extra_in_w + ' W';
+        document.getElementById('out-total-w').textContent = d.out_w + ' W';
+        document.getElementById('extra-out-w').textContent = d.extra_out_w + ' W';
 
         let batHtml = '';
         if (d.soc_delta2 != null) {
@@ -1160,7 +1207,7 @@ DASHBOARD_HTML = """<!doctype html>
 
         document.getElementById('updated').textContent = 'Actualizado ' + d.updated_at;
       } catch (e) {
-        document.getElementById('header').textContent = 'Error de conexión, reintentando…';
+        document.getElementById('header-left').textContent = 'Error de conexión, reintentando…';
       }
     }
     refresh();
