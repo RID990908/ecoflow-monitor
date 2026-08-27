@@ -487,15 +487,18 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
-def _charge_source(pv_w, ac_w, delta2_net_w) -> tuple:
-    """(verbo, emoji) de qué está alimentando a la Delta 2 en este momento:
-    corriente de la calle > solar (solo o + batería si la solar no alcanza) >
-    solo batería. "Cargando por" solo si hay una fuente externa metiendo
-    energía; si la batería está neta descargando, es "Usando", no "Cargando"."""
+def _charge_source(pv_w, ac_w, system_net_w) -> tuple:
+    """(verbo, emoji) de qué está alimentando al sistema (Delta 2 + batería
+    extra) en este momento: corriente de la calle > solar (solo o + batería
+    si la solar no alcanza) > solo batería. "Cargando por" solo si hay una
+    fuente externa metiendo energía; si el sistema está neto descargando
+    (aunque sea solo la batería extra la que está compensando), es "Usando",
+    no "Cargando". Usa el neto de TODO el sistema, no solo el de la Delta 2,
+    porque la batería que ayuda puede ser la extra."""
     has_solar = bool(pv_w and pv_w > NOISE_FLOOR_W)
     if ac_w and ac_w > NOISE_FLOOR_W:
         return "Cargando por", "🔌"
-    battery_helping = delta2_net_w is not None and delta2_net_w < -NOISE_FLOOR_W
+    battery_helping = system_net_w is not None and system_net_w < -NOISE_FLOOR_W
     if has_solar and battery_helping:
         return "Usando", "☀️/🔋"
     if has_solar:
@@ -585,9 +588,10 @@ def build_report() -> str:
     # de entrada confiable (bms_slave.inputWatts).
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
+    system_net_w = delta2_net_w + (extra_net_w or 0)
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
 
-    source_verb, source_emoji = _charge_source(pv_w, ac_w, delta2_net_w)
+    source_verb, source_emoji = _charge_source(pv_w, ac_w, system_net_w)
 
     lines = [f"📊 *Informe EcoFlow* · {source_verb} {source_emoji}", ""]
 
@@ -599,7 +603,6 @@ def build_report() -> str:
     if soc_extra is not None:
         extra_emoji, extra_label, extra_suffix = _battery_flow_emoji(extra_net_w)
         lines.append(f"{extra_emoji} Batería Extra — {extra_label}: *{soc_extra:.1f}%*{extra_suffix}")
-    system_net_w = delta2_net_w + (extra_net_w or 0)
     combined = _combined_line(soc_delta2, soc_extra, system_net_w)
     if combined:
         lines.append(combined)
