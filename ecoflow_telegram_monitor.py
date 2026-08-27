@@ -1060,32 +1060,51 @@ def daily_summary_timer() -> None:
 
 
 # --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
-# 18:30, que dice qué debería estar encendido/apagado según el bloque horario
-# del plan. El frío es prioritario (queda ON siempre, incluso de noche, salvo
-# emergencia de batería) y la nevera es la carga gestionable que se apaga de
-# noche y se enciende/apaga según sol de día — al revés que en la versión
-# anterior del plan. Internet y ventilador son siempre libres; el ventilador
-# no aparece en el mensaje porque no hay ninguna decisión que tomar con él.
+# 19:30, que dice qué debería estar encendido/apagado según el bloque horario
+# del plan (que cubre las 24 h: la noche solo se consulta por /cargas, el
+# timer automático no manda mensajes fuera de esa ventana). El frío es
+# prioritario de día y a la primera parte de la noche, pero se apaga
+# programado a las 12 AM (acumuló frío todo el día, aguanta hasta el
+# amanecer) — antes de eso solo se apaga en emergencia de batería. La nevera
+# es la carga gestionable, solo ON de 9 AM a 4:30 PM. La TV tiene dos
+# ventanas con criterios distintos: mediodía (según exceso de consumo, igual
+# que la nevera) y 6:30-7:30 PM (según si la batería llegó sobrada al 75%).
 LOAD_ADVISOR_START_MIN = 6 * 60
-LOAD_ADVISOR_END_MIN = 19 * 60 + 30  # a veces entra algo de sol hasta las 7:30 PM
-FRIO_EMERGENCY_THRESHOLD = 25  # regla 2: el frío solo se apaga en emergencia (<25%)
+LOAD_ADVISOR_END_MIN = 19 * 60 + 30
+FRIO_EMERGENCY_THRESHOLD = 25  # regla 2: en horas "on", el frío solo se apaga en emergencia (<25%)
+TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
 NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
 POWERBANK_START_MIN = 10 * 60
 POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
 
 _LOAD_SCHEDULE = [
-    {"start": 6 * 60, "end": 9 * 60, "label": "6:00–9:00 AM",
-     "laptop": "min", "laptop_text": "💻 Laptop: solo si es imprescindible",
-     "nevera": "off_morning", "battery_goal": "Subiendo"},
-    {"start": 9 * 60, "end": 15 * 60, "label": "9:00 AM–3:00 PM",
-     "laptop": "full", "laptop_text": None,
-     "nevera": "conditional_peak", "battery_goal": "65–75% a las 3 PM"},
+    {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM",
+     "laptop": "off", "laptop_text": None, "frio": "on",
+     "nevera": "off", "tv": "off", "battery_goal": "Sin sol aún, ~-2%"},
+    {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM",
+     "laptop": "min", "laptop_text": "💻 Laptop: solo si es imprescindible", "frio": "on",
+     "nevera": "off", "tv": "off", "battery_goal": "Sube lento con el primer sol"},
+    {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM",
+     "laptop": "full", "laptop_text": None, "frio": "on",
+     "nevera": "conditional", "tv": "off", "battery_goal": "~55-60% al mediodía"},
+    {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM",
+     "laptop": "full", "laptop_text": None, "frio": "on",
+     "nevera": "conditional", "tv": "peak", "battery_goal": "65–75% a las 3 PM"},
     {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
-     "laptop": "min", "laptop_text": "💻 Laptop: solo si es necesario",
-     "nevera": "conditional_afternoon", "battery_goal": "Mantener"},
-    {"start": 16 * 60 + 30, "end": 19 * 60 + 30, "label": "4:30–7:30 PM",
-     "laptop": "off", "laptop_text": None,
-     "nevera": "off_night", "battery_goal": "70%+ al anochecer"},
+     "laptop": "min", "laptop_text": "💻 Laptop: solo si es necesario", "frio": "on",
+     "nevera": "conditional", "tv": "off", "battery_goal": "Mantener con el sol restante"},
+    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
+     "laptop": "off", "laptop_text": None, "frio": "on",
+     "nevera": "off", "tv": "off", "battery_goal": "70%+"},
+    {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM",
+     "laptop": "off", "laptop_text": None, "frio": "on",
+     "nevera": "off", "tv": "evening", "battery_goal": "Cerrar el día con 68-75%"},
+    {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM",
+     "laptop": "off", "laptop_text": None, "frio": "on",
+     "nevera": "off", "tv": "off", "battery_goal": "Bajando controlado"},
+    {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM",
+     "laptop": "off", "laptop_text": None, "frio": "off_midnight",
+     "nevera": "off", "tv": "off", "battery_goal": "Amanecer con 25-40%"},
 ]
 
 
@@ -1098,32 +1117,48 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _frio_line(avg_soc) -> str:
-    """Regla 2: el frío es prioritario, se mantiene encendido siempre (hasta
-    de noche) salvo emergencia de batería por debajo del 15%."""
+def _frio_line(frio_mode: str, avg_soc) -> str:
+    """Regla 2 y 3: el frío es prioritario de día y a la primera parte de la
+    noche (solo se apaga en emergencia de batería <25%); a las 12 AM se apaga
+    programado porque ya acumuló frío todo el día y aguanta hasta el amanecer."""
+    if frio_mode == "off_midnight":
+        return "🧊 Frío: OFF (apagado a las 12 AM, acumuló frío todo el día)"
     if avg_soc is not None and avg_soc < FRIO_EMERGENCY_THRESHOLD:
         return f"🧊 Frío: EMERGENCIA — batería {avg_soc:.1f}%, apagar"
     return "🧊 Frío: ON"
 
 
-def _nevera_tv_lines(nevera_mode: str, pv_w, out_w) -> tuple:
-    """Regla 1: si la salida supera la entrada se apaga primero la NEVERA y,
-    si no alcanza, después la TV (umbral: los 100 W de la nevera)."""
+def _nevera_line(nevera_mode: str, pv_w, out_w) -> tuple:
+    """Regla 1 y 4: nevera solo ON de 9 AM a 4:30 PM; ahí se apaga primero
+    (antes que la TV) si la salida supera la entrada. Devuelve (línea, exceso
+    de watts o None) — el exceso lo reutiliza la TV del mediodía."""
+    if nevera_mode == "off":
+        return "🥶 Nevera: OFF", None
     pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
     out_str = f"{out_w} W" if out_w is not None else "N/D"
-    if nevera_mode in ("off_morning", "off_night"):
-        return "🥶 Nevera: OFF", "📺 TV: OFF"
     excess = (out_w - pv_w) if (out_w is not None and pv_w is not None) else None
-    if nevera_mode == "conditional_afternoon":
-        if excess is not None and excess > 0:
-            return f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: OFF"
-        return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OFF"
-    # conditional_peak (9 AM-3 PM), con TV en juego
     if excess is None or excess <= 0:
-        return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OK, ventana ideal (1 h)"
+        return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", excess
     if excess <= NEVERA_WATTS:
-        return f"🥶 Nevera: APAGAR 30-40 min (salida {out_str} > entrada {pv_str})", "📺 TV: OK, alcanza con la nevera"
-    return f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: apagar también"
+        return f"🥶 Nevera: APAGAR 30-40 min (salida {out_str} > entrada {pv_str})", excess
+    return f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", excess
+
+
+def _tv_line(tv_mode: str, excess, avg_soc) -> str:
+    """Regla 1 (mediodía, sigue a la nevera) y regla 6 (noche, según si se
+    llegó sobrado al 75% de batería — dos criterios distintos, no relacionados)."""
+    if tv_mode == "peak":
+        if excess is None or excess <= 0:
+            return "📺 TV: OK, ventana ideal (1 h)"
+        if excess <= NEVERA_WATTS:
+            return "📺 TV: OK, alcanza con la nevera"
+        return "📺 TV: apagar también"
+    if tv_mode == "evening":
+        if avg_soc is not None and avg_soc >= TV_EVENING_THRESHOLD:
+            return "📺 TV: OK (1 h), llegaste sobrado al anochecer"
+        soc_str = f"{avg_soc:.1f}%" if avg_soc is not None else "N/D"
+        return f"📺 TV: OFF (necesita {TV_EVENING_THRESHOLD}%+, vas en {soc_str})"
+    return "📺 TV: OFF"
 
 
 def _powerbank_line(now) -> str:
@@ -1151,14 +1186,14 @@ def build_load_advisor_message() -> str:
     now = datetime.now(TZ)
     m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    nevera_line, tv_line = _nevera_tv_lines(block["nevera"], m["pv_w"], m["out_w"])
+    nevera_line, excess = _nevera_line(block["nevera"], m["pv_w"], m["out_w"])
     lines = [
         f"🔆 *Gestión de cargas* · {block['label']}",
         "✅ Internet: ON",
-        _frio_line(m["avg_soc"]),
+        _frio_line(block["frio"], m["avg_soc"]),
         _laptop_line(block),
         nevera_line,
-        tv_line,
+        _tv_line(block["tv"], excess, m["avg_soc"]),
         _powerbank_line(now),
         "",
         f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
@@ -1194,7 +1229,7 @@ PROJECTION_CHECK_MINUTES = 10
 PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
 BATTERY_CHECKPOINTS = [
     (15 * 60, 65, "las 3:00 PM"),
-    (19 * 60 + 30, 70, "el anochecer"),
+    (19 * 60 + 30, 68, "el cierre del día (7:30 PM)"),
 ]
 
 _projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se avisó ese checkpoint
