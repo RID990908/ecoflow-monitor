@@ -1076,8 +1076,9 @@ DASHBOARD_HTML = """<!doctype html>
 <title>EcoFlow</title>
 <style>
   * { box-sizing: border-box; }
+  :root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); }
   body {
-    margin: 0; min-height: 100vh; background: #000; color: #f5f5f5;
+    margin: 0; min-height: 100vh; background: #0b0f14; color: #f5f5f5;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     display: flex; flex-direction: column; align-items: center; padding: 20px 16px 50px;
   }
@@ -1085,10 +1086,10 @@ DASHBOARD_HTML = """<!doctype html>
     width: 100%; max-width: 380px; display: flex; justify-content: space-between;
     align-items: flex-start; margin-bottom: 18px;
   }
-  .io-col .io-label { font-size: 13px; }
-  .io-col .io-value { font-size: 30px; font-weight: 700; margin-top: 2px; }
-  .io-col.in .io-label { color: #4ade80; }
-  .io-col.out .io-label { color: #fb923c; }
+  .io-col .io-label { font-size: 13px; color: #6b7684; transition: color 200ms var(--ease-out); }
+  .io-col .io-label.active { color: #4ade80; }
+  .io-col.out .io-label.active { color: #fb923c; }
+  .io-col .io-value { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .io-col.out { text-align: right; }
   .io-center { text-align: center; padding-top: 4px; }
   .io-center .verb { font-size: 13px; color: #9aa4af; }
@@ -1098,40 +1099,38 @@ DASHBOARD_HTML = """<!doctype html>
   .icon-circle {
     width: 52px; height: 52px; border-radius: 50%; background: #1c232b;
     display: flex; align-items: center; justify-content: center; font-size: 22px;
-    transition: background 0.4s ease;
+    transition: background-color 200ms var(--ease-out);
   }
-  .icon-circle.charging { background: #14351f; }
-  .icon-circle.discharging { background: #3a1616; }
-  .icon-watts { font-size: 12px; color: #9aa4af; margin-top: 5px; }
-  .icon-dir { font-size: 11px; margin-top: 1px; }
+  .icon-circle.charging { background-color: #14351f; }
+  .icon-circle.discharging { background-color: #3a1616; }
+  .icon-watts { font-size: 12px; color: #9aa4af; margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .icon-dir { font-size: 11px; margin-top: 1px; transition: color 200ms var(--ease-out); }
   .icon-dir.charging { color: #4ade80; }
   .icon-dir.discharging { color: #f87171; }
-  .connector { width: 100%; max-width: 380px; height: 22px; position: relative; margin-bottom: 2px; }
-  .connector::before {
-    content: ""; position: absolute; left: 12%; right: 12%; top: 0; height: 1px; background: #2a333d;
-  }
-  .connector span {
-    position: absolute; top: 0; width: 1px; height: 22px; background: #2a333d;
-  }
   .ring-wrap { position: relative; width: 240px; height: 240px; margin: 6px 0 8px; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
     display: flex; align-items: center; justify-content: center;
-    transition: background 0.6s ease;
+    transition: background 250ms var(--ease-out);
   }
   .ring-inner {
-    width: 80%; height: 80%; border-radius: 50%; background: #000;
+    width: 80%; height: 80%; border-radius: 50%; background: #0b0f14;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
   }
-  .pct { font-size: 48px; font-weight: 700; line-height: 1; }
-  .pct-sub { font-size: 13px; color: #9aa4af; margin-top: 8px; }
-  .pct-sub .dur { font-size: 15px; color: #e5e7eb; font-weight: 600; margin-top: 2px; }
+  .pct { font-size: 48px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .pct-sub { font-size: 13px; color: #9aa4af; margin-top: 8px; text-align: center; }
+  .pct-sub .dur { font-size: 22px; color: #e5e7eb; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .eta-box {
     margin-top: 4px; padding: 14px 22px; border-radius: 16px; background: #141b22;
     text-align: center; max-width: 340px; width: 100%;
+    opacity: 0; transform: scale(0.97); visibility: hidden;
+    transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), visibility 200ms;
   }
-  .eta-box .eta-main { font-size: 22px; font-weight: 700; color: #4ade80; }
+  .eta-box.visible { opacity: 1; transform: scale(1); visibility: visible; }
+  .eta-box .eta-main { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .eta-main.eta-ok { color: #4ade80; }
+  .eta-main.eta-warn { color: #f87171; }
   .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; }
   .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
   .battery-row {
@@ -1139,21 +1138,29 @@ DASHBOARD_HTML = """<!doctype html>
     background: #141b22; border-radius: 14px; padding: 12px 16px; margin-top: 8px;
   }
   .battery-row .name { font-size: 14px; color: #cbd5e1; }
-  .battery-row .val { font-size: 16px; font-weight: 700; }
+  .battery-row .val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .ports { width: 100%; max-width: 380px; margin-top: 14px; }
   .ports .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .port-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
-  .updated { margin-top: 22px; font-size: 12px; color: #5b6670; }
+  .port-row span:last-child { font-variant-numeric: tabular-nums; }
+  .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
+  .live-dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: #4ade80; margin-right: 6px; vertical-align: middle;
+    transition: background-color 300ms var(--ease-out);
+  }
+  .live-dot.stale { background: #ef4444; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
 </style>
 </head>
 <body>
   <div class="io-row">
-    <div class="io-col in"><div class="io-label">Entrada</div><div class="io-value" id="in-w">-- W</div></div>
+    <div class="io-col in"><div class="io-label" id="in-label">Entrada</div><div class="io-value" id="in-w">-- W</div></div>
     <div class="io-center">
       <div class="verb" id="source-verb">Cargando…</div>
       <div class="emoji" id="source-emoji"></div>
     </div>
-    <div class="io-col out"><div class="io-label">Salida</div><div class="io-value" id="out-w">-- W</div></div>
+    <div class="io-col out"><div class="io-label" id="out-label">Salida</div><div class="io-value" id="out-w">-- W</div></div>
   </div>
 
   <div class="icons-row">
@@ -1181,7 +1188,7 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </div>
 
-  <div class="eta-box" id="eta-box" style="display:none">
+  <div class="eta-box" id="eta-box">
     <div class="eta-main" id="eta-main"></div>
     <div class="eta-sub" id="eta-sub"></div>
   </div>
@@ -1191,7 +1198,10 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="title">Puertos activos</div>
     <div id="ports"></div>
   </div>
-  <div class="updated" id="updated"></div>
+  <div class="updated">
+    <span class="live-dot" id="live-dot"></span>
+    <span id="updated-text"></span>
+  </div>
   <script>
     async function refresh() {
       try {
@@ -1207,23 +1217,27 @@ DASHBOARD_HTML = """<!doctype html>
         const pct = d.percent != null ? d.percent : 0;
         const ring = document.getElementById('ring');
         ring.style.setProperty('--pct', pct);
-        ring.style.setProperty('--ring-color', pct <= 20 ? '#ef4444' : '#22c55e');
+        ring.style.setProperty('--ring-color', pct <= 20 ? '#ef4444' : pct <= 40 ? '#eab308' : '#22c55e');
         document.getElementById('pct').textContent = (d.percent != null ? d.percent.toFixed(1) : '--') + '%';
         document.getElementById('dur').textContent = d.remain_duration || '--';
 
         const etaBox = document.getElementById('eta-box');
         if (d.eta_text) {
-          etaBox.style.display = 'block';
-          document.getElementById('eta-main').textContent = d.eta_text;
+          etaBox.classList.add('visible');
+          const etaMain = document.getElementById('eta-main');
+          etaMain.textContent = d.eta_text;
+          etaMain.className = 'eta-main ' + (d.eta_text.startsWith('Full') ? 'eta-ok' : 'eta-warn');
           document.getElementById('eta-sub').textContent = d.threshold_text || d.last_ac_text || '';
         } else {
-          etaBox.style.display = 'none';
+          etaBox.classList.remove('visible');
         }
 
         document.getElementById('in-w').textContent = d.in_w + ' W';
         document.getElementById('out-w').textContent = d.out_w + ' W';
         document.getElementById('ac-w').textContent = d.ac_w + ' W';
         document.getElementById('pv-w').textContent = d.pv_w + ' W';
+        document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
+        document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
 
         // Batería extra: verde/🔋 si carga (neto >= 0), rojo/🪫 si descarga hacia la Delta 2 (mismo criterio que el bot)
         const extraCircle = document.getElementById('extra-circle');
@@ -1267,9 +1281,11 @@ DASHBOARD_HTML = """<!doctype html>
           portsWrap.style.display = 'none';
         }
 
-        document.getElementById('updated').textContent = 'Actualizado ' + d.updated_at;
+        document.getElementById('live-dot').classList.remove('stale');
+        document.getElementById('updated-text').textContent = 'Actualizado ' + d.updated_at;
       } catch (e) {
-        document.getElementById('header-left').textContent = 'Error de conexión, reintentando…';
+        document.getElementById('live-dot').classList.add('stale');
+        document.getElementById('updated-text').textContent = 'Sin conexión, reintentando…';
       }
     }
     refresh();
@@ -1288,6 +1304,10 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # Sin esto, el navegador (o Telegram WebView) puede quedarse con un HTML
+        # viejo mientras la API ya cambió de forma — como pasó una vez con
+        # extra_in_w/extra_out_w renombrados a extra_net_w ("undefined W" en pantalla).
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
