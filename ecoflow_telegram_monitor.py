@@ -21,7 +21,6 @@ Uso:
 """
 
 import base64
-import collections
 import hashlib
 import hmac
 import http.server
@@ -145,11 +144,6 @@ _daily_solar_wh = 0.0
 _daily_consumed_wh = 0.0
 _daily_lock = threading.Lock()
 _daily_summary_sent_date = None
-
-# Historial para el gráfico del dashboard: una muestra cada AC_CHECK_MINUTES
-# (por default 5 min), hasta 24h. En memoria, se pierde en cada redeploy.
-_history = collections.deque(maxlen=288)
-_history_lock = threading.Lock()
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
@@ -413,25 +407,6 @@ def get_device_quota_cached(sn: str) -> dict:
         if entry and entry.get("quota"):
             return entry["quota"]
     raise RuntimeError("Todavía no llegó ningún dato del dispositivo por MQTT")
-
-
-def get_device_online(sn: str) -> bool:
-    if USE_PRIVATE_API:
-        # El campo "online" solo llega en la respuesta a un pedido explícito
-        # (get_reply), que a veces no alcanza a llegar antes de que
-        # get_device_quota ya haya devuelto datos del canal de push. Si
-        # recibimos datos frescos del dispositivo, ya sabemos que está online.
-        with _mqtt_cache_lock:
-            entry = _device_cache.get(sn, {})
-            if entry.get("online"):
-                return True
-            return bool(entry.get("quota")) and (time.time() - entry.get("updated_at", 0) < 120)
-
-    payload = _ecoflow_get("/iot-open/sign/device/list", {})
-    for dev in payload.get("data", []):
-        if dev.get("sn") == sn:
-            return dev.get("online") == 1
-    return False
 
 
 def _pick(data: dict, *keys, default=None):
@@ -977,11 +952,6 @@ def ac_check_timer() -> None:
             state_changed = is_charging != WAS_CHARGING_AC
             WAS_CHARGING_AC = is_charging
 
-            extra_soc_hist = get_extra_battery_soc(data)
-            avg_soc_hist = round((soc + extra_soc_hist) / 2, 1) if soc is not None and extra_soc_hist is not None else soc
-            with _history_lock:
-                _history.append({"t": time.time(), "pct": avg_soc_hist, "pv_w": pv_w or 0})
-
             if soc is not None:
                 is_below = soc < BATTERY_LOW_THRESHOLD
                 if is_below and not WAS_BELOW_LOW_THRESHOLD:
@@ -1077,15 +1047,6 @@ def daily_summary_timer() -> None:
 
 # --- Dashboard web: la misma info que el bot, en vivo, sin tener que pedirla ---
 PORT = int(os.environ.get("PORT", "8080"))
-
-
-def get_dashboard_history() -> list:
-    with _history_lock:
-        samples = list(_history)
-    return [
-        {"t": datetime.fromtimestamp(s["t"], TZ).strftime("%H:%M"), "pct": s["pct"], "pv_w": s["pv_w"]}
-        for s in samples
-    ]
 
 
 def get_dashboard_status() -> dict:
@@ -1216,9 +1177,6 @@ DASHBOARD_HTML = """<!doctype html>
   .battery-row .val.discharging { color: #f87171; }
   .ports { width: 100%; max-width: 380px; margin-top: 14px; }
   .ports .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
-  .chart-wrap { width: 100%; max-width: 380px; margin-top: 16px; }
-  .chart-wrap .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
-  .chart-wrap svg { width: 100%; height: 90px; background: #141b22; border-radius: 14px; }
   .port-row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
   .port-row .port-name { display: flex; align-items: center; gap: 6px; }
   .usb-svg { flex-shrink: 0; color: #9aa4af; }
@@ -1279,11 +1237,6 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 
   <div class="batteries" id="batteries"></div>
-
-  <div class="chart-wrap" id="chart-wrap" style="display:none">
-    <div class="title">Últimas 24h — % de carga</div>
-    <svg id="chart" viewBox="0 0 340 90" preserveAspectRatio="none"></svg>
-  </div>
 
   <div class="ports" id="ports-wrap" style="display:none">
     <div class="title">Puertos activos</div>
@@ -1427,36 +1380,9 @@ DASHBOARD_HTML = """<!doctype html>
       }
     }
 
-    async function refreshHistory() {
-      try {
-        const res = await fetch('/api/history');
-        const hist = await res.json();
-        const chartWrap = document.getElementById('chart-wrap');
-        if (!hist || hist.length < 2) {
-          chartWrap.style.display = 'none';
-          return;
-        }
-        chartWrap.style.display = 'block';
-        const pts = hist.filter(h => h.pct != null);
-        if (pts.length < 2) { chartWrap.style.display = 'none'; return; }
-        const minPct = Math.min(...pts.map(p => p.pct), 0);
-        const maxPct = Math.max(...pts.map(p => p.pct), 100);
-        const w = 340, h = 90, pad = 6;
-        const xStep = (w - pad * 2) / (pts.length - 1);
-        const yFor = pct => h - pad - ((pct - minPct) / (maxPct - minPct || 1)) * (h - pad * 2);
-        const path = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${(pad + i * xStep).toFixed(1)} ${yFor(p.pct).toFixed(1)}`).join(' ');
-        document.getElementById('chart').innerHTML =
-          `<path d="${path}" fill="none" stroke="#4ade80" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />`;
-      } catch (e) {
-        // sin datos de historial todavía, no es grave
-      }
-    }
-
     refresh();
-    refreshHistory();
     setInterval(refresh, 1000);
     setInterval(tickClock, 1000);
-    setInterval(refreshHistory, 60000);
   </script>
 </body>
 </html>
@@ -1488,9 +1414,6 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             except Exception as exc:
                 payload = json.dumps({"ready": False, "error": str(exc)}).encode("utf-8")
                 self._send(500, payload, "application/json")
-        elif self.path == "/api/history":
-            payload = json.dumps(get_dashboard_history()).encode("utf-8")
-            self._send(200, payload, "application/json")
         else:
             self._send(404, b"not found", "text/plain")
 
