@@ -1055,6 +1055,7 @@ def get_dashboard_status() -> dict:
         "source_emoji": m["source_emoji"],
         "pv_w": m["pv_w"] or 0,
         "ac_w": m["ac_w"] or 0,
+        "delta2_net_w": round(m["delta2_net_w"]) if m["delta2_net_w"] is not None else None,
         "extra_net_w": round(m["extra_net_w"]) if m["extra_net_w"] is not None else None,
         "has_ac": m["has_ac"],
         "in_w": m["total_in_w"],
@@ -1139,6 +1140,8 @@ DASHBOARD_HTML = """<!doctype html>
   }
   .battery-row .name { font-size: 14px; color: #cbd5e1; }
   .battery-row .val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .battery-row .val.charging { color: #4ade80; }
+  .battery-row .val.discharging { color: #f87171; }
   .ports { width: 100%; max-width: 380px; margin-top: 14px; }
   .ports .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .port-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
@@ -1268,12 +1271,21 @@ DASHBOARD_HTML = """<!doctype html>
           extraDir.className = 'icon-dir charging';
         }
 
+        function batteryFlow(netW) {
+          // mismo criterio que el informe de Telegram: 🔋 carga/neutral, 🪫 descarga
+          if (netW == null || (netW > -10 && netW < 10)) return { emoji: '🔋', label: 'Carga', suffix: '', cls: '' };
+          if (netW > 10) return { emoji: '🔋', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
+          return { emoji: '🪫', label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
+        }
+
         let batHtml = '';
         if (d.soc_delta2 != null) {
-          batHtml += `<div class="battery-row"><div class="name">Delta 2</div><div class="val">${d.soc_delta2.toFixed(1)}%</div></div>`;
+          const f = batteryFlow(d.delta2_net_w);
+          batHtml += `<div class="battery-row"><div class="name">${f.emoji} Delta 2 — ${f.label}</div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
         }
         if (d.soc_extra != null) {
-          batHtml += `<div class="battery-row"><div class="name">Batería Extra</div><div class="val">${d.soc_extra.toFixed(1)}%</div></div>`;
+          const f = batteryFlow(d.extra_net_w);
+          batHtml += `<div class="battery-row"><div class="name">${f.emoji} Batería Extra — ${f.label}</div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
         }
         document.getElementById('batteries').innerHTML = batHtml;
 
