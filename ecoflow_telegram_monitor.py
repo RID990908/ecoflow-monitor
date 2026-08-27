@@ -479,6 +479,8 @@ def set_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
+        {"command": "vivo", "description": "Informe que se actualiza solo cada 15s"},
+        {"command": "parar", "description": "Cortar el informe en vivo"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
@@ -685,9 +687,85 @@ def build_report() -> str:
     return "\n".join(lines)
 
 
+LIVE_UPDATE_SECONDS = 15
+LIVE_MAX_MINUTES = 30  # tope de seguridad: si te olvidás de /parar, se corta solo
+
+_live_lock = threading.Lock()
+_live_message_id = None
+_live_generation = 0  # se incrementa en cada /vivo o /parar para cortar loops viejos
+
+
+def edit_telegram(message_id: int, text: str, chat_id: str = None) -> bool:
+    """Devuelve False (sin lanzar excepción) si Telegram dice 'message is not
+    modified' — pasa seguido cuando los datos no cambiaron entre una edición y
+    la siguiente, y no es un error real."""
+    resp = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+        json={"chat_id": chat_id or CHAT_ID, "message_id": message_id, "text": text, "parse_mode": "Markdown"},
+        timeout=30,
+    )
+    payload = resp.json()
+    if not payload.get("ok"):
+        if "not modified" in str(payload.get("description", "")).lower():
+            return False
+        raise RuntimeError(f"Telegram API error: {payload}")
+    return True
+
+
+def _live_update_loop(message_id: int, chat_id: str, generation: int) -> None:
+    deadline = time.time() + LIVE_MAX_MINUTES * 60
+    while time.time() < deadline:
+        time.sleep(LIVE_UPDATE_SECONDS)
+        with _live_lock:
+            if generation != _live_generation:
+                return  # se lanzó otro /vivo o se pidió /parar
+        try:
+            edit_telegram(message_id, build_report() + "\n\n_🔴 en vivo_", chat_id=chat_id)
+        except Exception:
+            log.exception("Error actualizando el mensaje en vivo")
+    try:
+        edit_telegram(message_id, build_report() + "\n\n_⏹ en vivo detenido (30 min)_", chat_id=chat_id)
+    except Exception:
+        log.exception("Error al cerrar el mensaje en vivo")
+
+
+def start_live_report(chat_id: str) -> None:
+    global _live_message_id, _live_generation
+    with _live_lock:
+        _live_generation += 1
+        generation = _live_generation
+    resp = requests.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        json={"chat_id": chat_id, "text": build_report() + "\n\n_🔴 en vivo_", "parse_mode": "Markdown"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+    if not payload.get("ok"):
+        raise RuntimeError(f"Telegram API error: {payload}")
+    message_id = payload["result"]["message_id"]
+    with _live_lock:
+        _live_message_id = message_id
+    threading.Thread(target=_live_update_loop, args=(message_id, chat_id, generation), daemon=True).start()
+
+
+def stop_live_report(chat_id: str) -> None:
+    global _live_generation
+    with _live_lock:
+        _live_generation += 1
+        message_id = _live_message_id
+    if message_id:
+        try:
+            edit_telegram(message_id, build_report() + "\n\n_⏹ en vivo detenido_", chat_id=chat_id)
+        except Exception:
+            log.exception("Error al detener el mensaje en vivo")
+
+
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
+    f"/vivo — informe que se actualiza solo cada {LIVE_UPDATE_SECONDS}s (por hasta {LIVE_MAX_MINUTES} min)\n"
+    "/parar — corta el informe en vivo\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
@@ -709,6 +787,10 @@ def handle_command(text: str, chat_id: str) -> None:
     cmd = parts[0].split("@")[0].lower()
     if cmd == "/reporte":
         send_telegram(build_report(), chat_id=chat_id)
+    elif cmd == "/vivo":
+        start_live_report(chat_id)
+    elif cmd == "/parar":
+        stop_live_report(chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)
