@@ -598,7 +598,6 @@ def build_report() -> str:
         lines.append("")
 
     # 4. Corriente
-    lines.append("⚡ *Corriente*")
     lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(ac_w) + ' W)' if ac_w > NOISE_FLOOR_W else 'No'}")
     lines.append(_last_ac_line())
 
