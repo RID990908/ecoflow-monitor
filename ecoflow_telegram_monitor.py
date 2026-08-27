@@ -498,11 +498,12 @@ def _battery_flow_emoji(net_w) -> tuple:
 
 # Delta 2 y batería extra son de la misma capacidad, así que el promedio
 # simple de sus %SOC es válido: ambas pesan lo mismo en el total.
-def _combined_line(soc_delta2, soc_extra) -> str:
+def _combined_line(soc_delta2, soc_extra, system_net_w) -> str:
     if soc_delta2 is None or soc_extra is None:
         return ""
     avg = round((soc_delta2 + soc_extra) / 2, 1)
-    return f"🔋 *Total del sistema*: *{avg:.1f}%*"
+    emoji = "🪫" if system_net_w is not None and system_net_w < -NOISE_FLOOR_W else "🔋"
+    return f"{emoji} *Total del sistema*: *{avg:.1f}%*"
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -564,7 +565,8 @@ def build_report() -> str:
     if soc_extra is not None:
         extra_emoji, extra_label, extra_suffix = _battery_flow_emoji(extra_net_w)
         lines.append(f"{extra_emoji} Batería Extra — {extra_label}: *{soc_extra:.1f}%*{extra_suffix}")
-    combined = _combined_line(soc_delta2, soc_extra)
+    system_net_w = delta2_net_w + (extra_net_w or 0)
+    combined = _combined_line(soc_delta2, soc_extra, system_net_w)
     if combined:
         lines.append(combined)
     lines.append("")
