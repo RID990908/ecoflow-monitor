@@ -34,7 +34,6 @@ import threading
 import time
 import uuid as uuid_lib
 from datetime import datetime, timedelta
-from io import BytesIO
 from zoneinfo import ZoneInfo
 
 import requests
@@ -43,11 +42,6 @@ try:
     import paho.mqtt.client as mqtt
 except ImportError:
     mqtt = None
-
-try:
-    from PIL import Image, ImageDraw, ImageFont
-except ImportError:
-    Image = None
 
 API_HOST = os.environ.get("ECOFLOW_API_HOST", "https://api.ecoflow.com")
 
@@ -513,88 +507,6 @@ def send_telegram(text: str, chat_id: str = None) -> None:
             _sent_message_ids.append(msg_id)
 
 
-def send_telegram_photo(photo_bytes: bytes, chat_id: str = None) -> None:
-    resp = requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-        data={"chat_id": chat_id or CHAT_ID},
-        files={"photo": ("bateria.png", photo_bytes, "image/png")},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    if not payload.get("ok"):
-        raise RuntimeError(f"Telegram API error: {payload}")
-    msg_id = payload.get("result", {}).get("message_id")
-    if msg_id and (chat_id or CHAT_ID) == CHAT_ID:
-        with _sent_message_lock:
-            _sent_message_ids.append(msg_id)
-
-
-BATT_GREEN = (74, 222, 128)
-BATT_RED = (248, 113, 113)
-BATT_GRAY = (107, 118, 132)
-BG_COLOR = (11, 15, 20)
-TEXT_COLOR = (245, 245, 245)
-
-
-def _draw_battery_icon(draw, x, y, w, h, color) -> None:
-    """Mismo ícono que el dashboard web: cuerpo redondeado + terminal chica al costado."""
-    body_w = int(w * 0.85)
-    draw.rounded_rectangle([x, y, x + body_w, y + h], radius=int(h * 0.22), outline=color, width=5)
-    nub_w = max(4, int(w * 0.08))
-    nub_h = int(h * 0.4)
-    nub_x = x + body_w + 4
-    nub_y = y + (h - nub_h) // 2
-    draw.rounded_rectangle([nub_x, nub_y, nub_x + nub_w, nub_y + nub_h], radius=2, fill=color)
-    pad = max(4, int(h * 0.14))
-    draw.rounded_rectangle([x + pad, y + pad, x + body_w - pad, y + h - pad], radius=int(h * 0.12), fill=color)
-
-
-def _battery_state(net_w) -> str:
-    if net_w is None or -NOISE_FLOOR_W <= net_w <= NOISE_FLOOR_W:
-        return "neutral"
-    return "charging" if net_w > NOISE_FLOOR_W else "discharging"
-
-
-def generate_battery_image(batteries: list) -> bytes:
-    """batteries: lista de (label, pct, net_w). Devuelve un PNG con un
-    ícono de batería por cada una, coloreado igual que el dashboard web
-    (verde=carga, rojo=descarga, gris=neutral)."""
-    n = len(batteries)
-    cell_w = 220
-    img_w = cell_w * n
-    img_h = 160
-    img = Image.new("RGB", (img_w, img_h), BG_COLOR)
-    draw = ImageDraw.Draw(img)
-    try:
-        font_label = ImageFont.load_default(size=16)
-        font_pct = ImageFont.load_default(size=26)
-    except TypeError:
-        font_label = ImageFont.load_default()
-        font_pct = font_label
-
-    color_map = {"charging": BATT_GREEN, "discharging": BATT_RED, "neutral": BATT_GRAY}
-    for i, (label, pct, net_w) in enumerate(batteries):
-        state = _battery_state(net_w)
-        color = color_map[state]
-        cx = i * cell_w
-        batt_w, batt_h = 130, 62
-        bx = cx + (cell_w - batt_w) // 2
-        by = 30
-        _draw_battery_icon(draw, bx, by, batt_w, batt_h, color)
-
-        pct_text = f"{pct:.1f}%" if pct is not None else "N/D"
-        pct_bbox = draw.textbbox((0, 0), pct_text, font=font_pct)
-        draw.text((cx + (cell_w - (pct_bbox[2] - pct_bbox[0])) // 2, by + batt_h + 14), pct_text, fill=TEXT_COLOR, font=font_pct)
-
-        label_bbox = draw.textbbox((0, 0), label, font=font_label)
-        draw.text((cx + (cell_w - (label_bbox[2] - label_bbox[0])) // 2, by + batt_h + 50), label, fill=(154, 164, 175), font=font_label)
-
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
 def set_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Qué hace este bot"},
@@ -847,33 +759,6 @@ def build_report() -> str:
     return _format_report(m)
 
 
-def send_full_report(chat_id: str = None) -> None:
-    """Manda la imagen con los íconos de batería (si Pillow está disponible)
-    seguida del informe de texto, consultando el dispositivo una sola vez
-    para no duplicar el pedido MQTT."""
-    chat_id = chat_id or CHAT_ID
-    if not ECOFLOW_READY:
-        send_telegram(build_report(), chat_id=chat_id)
-        return
-    try:
-        m = _gather_metrics()
-    except Exception as exc:
-        log.exception("Error consultando la Delta 2")
-        send_telegram(f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}", chat_id=chat_id)
-        return
-
-    if Image is not None:
-        try:
-            batteries = [("Delta 2", m["soc_delta2"], m["delta2_net_w"])]
-            if m["soc_extra"] is not None:
-                batteries.append(("Batería Extra", m["soc_extra"], m["extra_net_w"]))
-            photo = generate_battery_image(batteries)
-            send_telegram_photo(photo, chat_id=chat_id)
-        except Exception:
-            log.exception("Error generando/mandando la imagen de batería (no bloqueante)")
-
-    send_telegram(_format_report(m), chat_id=chat_id)
-
 
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
@@ -898,7 +783,7 @@ def handle_command(text: str, chat_id: str) -> None:
     parts = text.strip().split()
     cmd = parts[0].split("@")[0].lower()
     if cmd == "/reporte":
-        send_full_report(chat_id=chat_id)
+        send_telegram(build_report(), chat_id=chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)
@@ -977,7 +862,7 @@ def report_timer() -> None:
             log.info("Informe automático omitido (horario silencioso)")
             continue
         try:
-            send_full_report()
+            send_telegram(build_report())
             log.info("Informe periódico enviado")
         except Exception:
             log.exception("Fallo enviando el informe periódico")
@@ -1435,7 +1320,7 @@ DASHBOARD_HTML = """<!doctype html>
         const pct = d.percent != null ? d.percent : 0;
         const ring = document.getElementById('ring');
         ring.style.setProperty('--pct', pct);
-        ring.style.setProperty('--ring-color', pct <= 20 ? '#ef4444' : pct <= 40 ? '#eab308' : '#22c55e');
+        ring.style.setProperty('--ring-color', pct <= 10 ? '#ef4444' : pct <= 20 ? '#eab308' : '#22c55e');
         document.getElementById('pct').textContent = (d.percent != null ? d.percent.toFixed(1) : '--') + '%';
         document.getElementById('dur').textContent = d.remain_duration || '--';
 
