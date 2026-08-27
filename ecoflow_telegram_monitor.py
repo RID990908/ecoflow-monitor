@@ -746,7 +746,7 @@ HELP_TEXT = (
     f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
     f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
     "También te aviso al llegar a 100% de carga.\n\n"
-    "🔆 De 6:00 AM a 6:30 PM te mando cada media hora qué encender/apagar (nevera, "
+    "🔆 De 6:00 AM a 7:30 PM te mando cada media hora qué encender/apagar (nevera, "
     "TV, laptop, power bank) según el plan.\n\n"
     "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
     "(65-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
@@ -769,7 +769,7 @@ def handle_command(text: str, chat_id: str) -> None:
         msg = build_load_advisor_message()
         if not msg:
             msg = (
-                "🌙 Fuera de franja (6:00 AM–6:30 PM): frío e internet ON, nevera OFF, "
+                "🌙 Fuera de franja (6:00 AM–7:30 PM): frío e internet ON, nevera OFF, "
                 "resto OFF (TV solo 1h si anocheció con 75%+)."
             )
         send_telegram(msg, chat_id=chat_id)
@@ -1067,7 +1067,7 @@ def daily_summary_timer() -> None:
 # anterior del plan. Internet y ventilador son siempre libres; el ventilador
 # no aparece en el mensaje porque no hay ninguna decisión que tomar con él.
 LOAD_ADVISOR_START_MIN = 6 * 60
-LOAD_ADVISOR_END_MIN = 18 * 60 + 30
+LOAD_ADVISOR_END_MIN = 19 * 60 + 30  # a veces entra algo de sol hasta las 7:30 PM
 FRIO_EMERGENCY_THRESHOLD = 15  # regla 2: el frío solo se apaga en emergencia (<15%)
 NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
 POWERBANK_START_MIN = 10 * 60
@@ -1083,7 +1083,7 @@ _LOAD_SCHEDULE = [
     {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
      "laptop": "min", "laptop_text": "💻 Laptop: solo si es necesario",
      "nevera": "conditional_afternoon", "battery_goal": "Mantener"},
-    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
+    {"start": 16 * 60 + 30, "end": 19 * 60 + 30, "label": "4:30–7:30 PM",
      "laptop": "off", "laptop_text": None,
      "nevera": "off_night", "battery_goal": "70%+ al anochecer"},
 ]
@@ -1194,7 +1194,7 @@ PROJECTION_CHECK_MINUTES = 10
 PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
 BATTERY_CHECKPOINTS = [
     (15 * 60, 65, "las 3:00 PM"),
-    (18 * 60 + 30, 70, "el anochecer"),
+    (19 * 60 + 30, 70, "el anochecer"),
 ]
 
 _projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se avisó ese checkpoint
