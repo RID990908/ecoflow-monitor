@@ -1099,7 +1099,6 @@ def get_dashboard_status() -> dict:
     remain_duration = None
     is_stable = bool(m["remain"] and m["remain"]["stable"])
     if is_stable:
-        eta_text = "Estable"
         remain_duration = "—"
     elif m["remain"]:
         r = m["remain"]
@@ -1147,9 +1146,11 @@ DASHBOARD_HTML = """<!doctype html>
     width: 100%; max-width: 380px; display: flex; justify-content: space-between;
     align-items: flex-start; margin-bottom: 18px;
   }
-  .io-col .io-label { font-size: 13px; color: #6b7684; transition: color 200ms var(--ease-out); }
+  .io-col .io-label { font-size: 13px; color: #6b7684; transition: color 200ms var(--ease-out); display: flex; align-items: center; gap: 4px; }
+  .io-col.out .io-label { justify-content: flex-end; }
   .io-col .io-label.active { color: #4ade80; }
   .io-col.out .io-label.active { color: #fb923c; }
+  .io-svg { flex-shrink: 0; }
   .io-col .io-value { font-size: 20px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .io-col.out { text-align: right; }
   .io-center { text-align: center; padding-top: 4px; }
@@ -1168,6 +1169,10 @@ DASHBOARD_HTML = """<!doctype html>
   .icon-dir { font-size: 11px; margin-top: 1px; transition: color 200ms var(--ease-out); }
   .icon-dir.charging { color: #4ade80; }
   .icon-dir.discharging { color: #f87171; }
+  .batt-icon { display: inline-flex; align-items: center; transition: color 200ms var(--ease-out); }
+  .batt-icon.batt-green { color: #4ade80; }
+  .batt-icon.batt-red { color: #f87171; }
+  .batt-icon.batt-gray { color: #6b7684; }
   .ring-wrap { position: relative; width: 240px; height: 240px; margin: 6px 0 8px; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
@@ -1192,14 +1197,13 @@ DASHBOARD_HTML = """<!doctype html>
   .eta-box .eta-main { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .eta-main.eta-ok { color: #4ade80; }
   .eta-main.eta-warn { color: #f87171; }
-  .eta-main.eta-neutral { color: #9aa4af; }
   .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; }
   .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
   .battery-row {
     display: flex; justify-content: space-between; align-items: center;
     background: #141b22; border-radius: 14px; padding: 12px 16px; margin-top: 8px;
   }
-  .battery-row .name { font-size: 14px; color: #cbd5e1; }
+  .battery-row .name { font-size: 14px; color: #cbd5e1; display: flex; align-items: center; gap: 6px; }
   .battery-row .val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .battery-row .val.charging { color: #4ade80; }
   .battery-row .val.discharging { color: #f87171; }
@@ -1208,7 +1212,9 @@ DASHBOARD_HTML = """<!doctype html>
   .chart-wrap { width: 100%; max-width: 380px; margin-top: 16px; }
   .chart-wrap .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .chart-wrap svg { width: 100%; height: 90px; background: #141b22; border-radius: 14px; }
-  .port-row { display: flex; justify-content: space-between; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
+  .port-row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
+  .port-row .port-name { display: flex; align-items: center; gap: 6px; }
+  .usb-svg { flex-shrink: 0; color: #9aa4af; }
   .port-row span:last-child { font-variant-numeric: tabular-nums; }
   .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
   .live-dot {
@@ -1222,12 +1228,12 @@ DASHBOARD_HTML = """<!doctype html>
 </head>
 <body>
   <div class="io-row">
-    <div class="io-col in"><div class="io-label" id="in-label">Entrada</div><div class="io-value" id="in-w">-- W</div></div>
+    <div class="io-col in"><div class="io-label" id="in-label"><svg class="io-svg" viewBox="0 0 24 24" width="14" height="14"><path d="M12 3v10m0 0l-4-4m4 4l4-4M4 19h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg> Entrada</div><div class="io-value" id="in-w">-- W</div></div>
     <div class="io-center">
       <div class="verb" id="source-verb">Cargando…</div>
       <div class="emoji" id="source-emoji"></div>
     </div>
-    <div class="io-col out"><div class="io-label" id="out-label">Salida</div><div class="io-value" id="out-w">-- W</div></div>
+    <div class="io-col out"><div class="io-label" id="out-label">Salida <svg class="io-svg" viewBox="0 0 24 24" width="14" height="14"><path d="M12 21V11m0 0l-4 4m4-4l4 4M4 5h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="io-value" id="out-w">-- W</div></div>
   </div>
 
   <div class="icons-row">
@@ -1278,6 +1284,25 @@ DASHBOARD_HTML = """<!doctype html>
     <span id="updated-text"></span>
   </div>
   <script>
+    // Ícono de batería en SVG (verde=carga, roja=descarga, gris=estable/sin datos).
+    // Un solo shape, coloreado con currentColor según la clase, en vez de 3
+    // archivos separados — mismo resultado visual, menos código repetido.
+    const BATTERY_SVG = `<svg viewBox="0 0 28 16" width="26" height="15">
+      <rect x="1" y="1" width="23" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+      <rect x="25" y="5.5" width="2.5" height="5" rx="1" fill="currentColor"/>
+      <rect x="3.5" y="3.5" width="18" height="9" rx="1.5" fill="currentColor"/>
+    </svg>`;
+    function batteryIcon(state) {
+      // state: 'charging' | 'discharging' | 'neutral'
+      const cls = state === 'charging' ? 'batt-green' : state === 'discharging' ? 'batt-red' : 'batt-gray';
+      return `<span class="batt-icon ${cls}">${BATTERY_SVG}</span>`;
+    }
+
+    // Ícono de puerto USB-C: forma ovalada típica del conector
+    const USB_SVG = `<svg class="usb-svg" viewBox="0 0 24 12" width="18" height="9">
+      <rect x="1" y="1" width="22" height="10" rx="5" fill="none" stroke="currentColor" stroke-width="2"/>
+    </svg>`;
+
     async function refresh() {
       try {
         const res = await fetch('/api/status');
@@ -1301,8 +1326,7 @@ DASHBOARD_HTML = """<!doctype html>
           etaBox.classList.add('visible');
           const etaMain = document.getElementById('eta-main');
           etaMain.textContent = d.eta_text;
-          const etaCls = d.eta_text.startsWith('Full') ? 'eta-ok' : d.eta_text === 'Estable' ? 'eta-neutral' : 'eta-warn';
-          etaMain.className = 'eta-main ' + etaCls;
+          etaMain.className = 'eta-main ' + (d.eta_text.startsWith('Full') ? 'eta-ok' : 'eta-warn');
           document.getElementById('eta-sub').textContent = d.threshold_text || d.last_ac_text || '';
         } else {
           etaBox.classList.remove('visible');
@@ -1320,46 +1344,46 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
 
-        // Batería extra: verde/🔋 si carga, rojo/🪫 si descarga hacia la Delta 2,
-        // gris/🔋 si está estable (ni carga ni descarga neta) — mismo criterio que el bot
+        // Batería extra: ícono verde si carga, rojo si descarga hacia la Delta 2,
+        // gris si está neutral — mismo criterio que el bot
         const extraCircle = document.getElementById('extra-circle');
         const extraDir = document.getElementById('extra-dir');
         const extraNet = d.extra_net_w;
         if (extraNet == null || (extraNet > -5 && extraNet < 5)) {
           document.getElementById('extra-w').textContent = (extraNet == null ? '--' : '0') + ' W';
-          extraCircle.textContent = '🔋';
+          extraCircle.innerHTML = batteryIcon('neutral');
           extraCircle.className = 'icon-circle';
-          extraDir.textContent = extraNet == null ? '' : '≈ estable';
+          extraDir.textContent = '';
           extraDir.className = 'icon-dir';
         } else if (extraNet < -5) {
           document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
-          extraCircle.textContent = '🪫';
+          extraCircle.innerHTML = batteryIcon('discharging');
           extraCircle.className = 'icon-circle discharging';
           extraDir.textContent = '↓ descarga';
           extraDir.className = 'icon-dir discharging';
         } else {
           document.getElementById('extra-w').textContent = Math.abs(extraNet) + ' W';
-          extraCircle.textContent = '🔋';
+          extraCircle.innerHTML = batteryIcon('charging');
           extraCircle.className = 'icon-circle charging';
           extraDir.textContent = '↑ carga';
           extraDir.className = 'icon-dir charging';
         }
 
         function batteryFlow(netW) {
-          // mismo criterio que el informe de Telegram: 🔋 carga/neutral, 🪫 descarga
-          if (netW == null || (netW > -5 && netW < 5)) return { emoji: '🔋', label: 'Carga', suffix: '', cls: '' };
-          if (netW > 5) return { emoji: '🔋', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
-          return { emoji: '🪫', label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
+          // mismo criterio que el informe de Telegram: neutral (gris) o carga (verde)/descarga (rojo)
+          if (netW == null || (netW > -5 && netW < 5)) return { icon: batteryIcon('neutral'), label: 'Carga', suffix: '', cls: '' };
+          if (netW > 5) return { icon: batteryIcon('charging'), label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
+          return { icon: batteryIcon('discharging'), label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
         }
 
         let batHtml = '';
         if (d.soc_delta2 != null) {
           const f = batteryFlow(d.delta2_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${f.emoji} Delta 2 — ${f.label}</div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${f.icon} Delta 2 — ${f.label}</div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
         }
         if (d.soc_extra != null) {
           const f = batteryFlow(d.extra_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${f.emoji} Batería Extra — ${f.label}</div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${f.icon} Batería Extra — ${f.label}</div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
         }
         document.getElementById('batteries').innerHTML = batHtml;
 
@@ -1367,7 +1391,7 @@ DASHBOARD_HTML = """<!doctype html>
         if (d.ports && d.ports.length) {
           portsWrap.style.display = 'block';
           document.getElementById('ports').innerHTML = d.ports.map(
-            p => `<div class="port-row"><span>${p.name}</span><span>${p.watts} W</span></div>`
+            p => `<div class="port-row"><span class="port-name">${USB_SVG}${p.name}</span><span>${p.watts} W</span></div>`
           ).join('');
         } else {
           portsWrap.style.display = 'none';
