@@ -472,18 +472,20 @@ def set_bot_commands() -> None:
     resp.raise_for_status()
 
 
-def _charge_source(pv_w, ac_w, delta2_net_w) -> str:
-    """Emoji de qué está alimentando a la Delta 2 en este momento: corriente de
-    la calle > solar (solo o + batería si la solar no alcanza) > solo batería."""
+def _charge_source(pv_w, ac_w, delta2_net_w) -> tuple:
+    """(verbo, emoji) de qué está alimentando a la Delta 2 en este momento:
+    corriente de la calle > solar (solo o + batería si la solar no alcanza) >
+    solo batería. "Cargando por" solo si hay una fuente externa metiendo
+    energía; si la batería está neta descargando, es "Usando", no "Cargando"."""
     has_solar = bool(pv_w and pv_w > NOISE_FLOOR_W)
     if ac_w and ac_w > NOISE_FLOOR_W:
-        return "🔌"
+        return "Cargando por", "🔌"
     battery_helping = delta2_net_w is not None and delta2_net_w < -NOISE_FLOOR_W
     if has_solar and battery_helping:
-        return "☀️/🔋"
+        return "Usando", "☀️/🔋"
     if has_solar:
-        return "☀️"
-    return "🔋"
+        return "Cargando por", "☀️"
+    return "Usando", "🔋"
 
 
 def _battery_flow_emoji(net_w) -> tuple:
@@ -553,9 +555,9 @@ def build_report() -> str:
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
 
-    source_emoji = _charge_source(pv_w, ac_w, delta2_net_w)
+    source_verb, source_emoji = _charge_source(pv_w, ac_w, delta2_net_w)
 
-    lines = [f"📊 *Informe EcoFlow* · Cargando por {source_emoji}", ""]
+    lines = [f"📊 *Informe EcoFlow* · {source_verb} {source_emoji}", ""]
 
     # 1. Datos del sistema (lo más importante: cuánta carga queda)
     lines.append("📋 *Datos del sistema*")
