@@ -554,8 +554,10 @@ def build_report() -> str:
 
     source_emoji = _charge_source(pv_w, ac_w, delta2_net_w)
 
-    lines = [f"📊 *Informe EcoFlow* · {source_emoji}", ""]
+    lines = [f"📊 *Informe EcoFlow* · Cargando por {source_emoji}", ""]
 
+    # 1. Datos del sistema (lo más importante: cuánta carga queda)
+    lines.append("🔋 *Datos del sistema*")
     delta2_emoji, delta2_label, delta2_suffix = _battery_flow_emoji(delta2_net_w)
     soc_delta2_str = f"{soc_delta2:.1f}" if soc_delta2 is not None else "N/D"
     lines.append(f"{delta2_emoji} Delta 2 — {delta2_label}: *{soc_delta2_str}%*{delta2_suffix}")
@@ -567,11 +569,10 @@ def build_report() -> str:
         lines.append(combined)
     lines.append("")
 
-    lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(ac_w) + ' W)' if ac_w > NOISE_FLOOR_W else 'No'}")
-    lines.append(_last_ac_line())
+    # 2. Flujo de energía
+    lines.append("🔄 *Flujo de energía*")
     lines.append(f"☀️ Entrada solar: {pv_w if pv_w is not None else 'N/D'} W")
     lines.append(f"📤 Salida: {out_w} W")
-
     if remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
         charging_up = int(remain_min) > 0 and total_in_w > out_w
@@ -579,7 +580,9 @@ def build_report() -> str:
         eta = datetime.now(TZ) + timedelta(minutes=abs(int(remain_min)))
         eta_verb = "vas a estar full a las" if charging_up else "dura hasta las"
         lines.append(f"⏱ ~{hours}h {minutes}m {verb} ({eta_verb} {eta.strftime('%H:%M')})")
+    lines.append("")
 
+    # 3. Puertos (solo si hay algo conectado)
     ports = [
         ("USB-C 1", _pick(data, "pd.typec1Watts")),
         ("USB-C 2", _pick(data, "pd.typec2Watts")),
@@ -589,10 +592,15 @@ def build_report() -> str:
     ]
     active_ports = [(name, w) for name, w in ports if w]
     if active_ports:
-        lines.append("")
-        lines.append("🔌 *Puertos activos:*")
+        lines.append("🔌 *Puertos*")
         for name, w in active_ports:
             lines.append(f"  {name}: {w} W")
+        lines.append("")
+
+    # 4. Corriente
+    lines.append("⚡ *Corriente*")
+    lines.append(f"🔌 ¿Hay corriente?: {'Sí (' + str(ac_w) + ' W)' if ac_w > NOISE_FLOOR_W else 'No'}")
+    lines.append(_last_ac_line())
 
     return "\n".join(lines)
 
