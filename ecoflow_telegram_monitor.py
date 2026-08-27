@@ -71,8 +71,6 @@ AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por
 # de autonomía, horario del resumen diario). zoneinfo maneja el horario de
 # verano de Cuba automáticamente.
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Havana"))
-DAILY_SUMMARY_HOUR = int(os.environ.get("DAILY_SUMMARY_HOUR", "22"))
-
 # Horario silencioso: de noche no tiene sentido recibir el informe automático
 # cada media hora. Las alertas (llegó/se fue la luz, batería baja/llena) siguen
 # funcionando igual, solo se pausa el informe periódico.
@@ -80,6 +78,9 @@ QUIET_START_HOUR = int(os.environ.get("QUIET_START_HOUR", "23"))
 QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
 QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "7"))
 QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
+
+# El resumen diario sale 10 min antes de que arranque el horario silencioso.
+_daily_summary_total_min = (QUIET_START_HOUR * 60 + QUIET_START_MINUTE - 10) % (24 * 60)
 
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
@@ -896,7 +897,7 @@ def watchdog_timer() -> None:
 
 
 def daily_summary_timer() -> None:
-    """Una vez por día, a la hora configurada (DAILY_SUMMARY_HOUR, hora local),
+    """Una vez por día, 10 min antes de que arranque el horario silencioso,
     manda cuánto entró de solar y cuánto se consumió en total ese día."""
     global _daily_solar_wh, _daily_consumed_wh, _daily_summary_sent_date
     while True:
@@ -905,7 +906,11 @@ def daily_summary_timer() -> None:
             continue
         now = datetime.now(TZ)
         today = now.date()
-        if now.hour != DAILY_SUMMARY_HOUR or _daily_summary_sent_date == today:
+        now_total_min = now.hour * 60 + now.minute
+        # ventana de 5 min (coincide con el intervalo de chequeo) para no
+        # depender de pegarle justo al minuto exacto.
+        in_window = 0 <= (now_total_min - _daily_summary_total_min) % (24 * 60) < 5
+        if not in_window or _daily_summary_sent_date == today:
             continue
         try:
             with _daily_lock:
