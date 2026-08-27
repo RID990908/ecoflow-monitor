@@ -1075,16 +1075,16 @@ POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca 
 
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 9 * 60, "label": "6:00–9:00 AM",
-     "laptop": "💻 Laptop: solo si es imprescindible",
+     "laptop": "min", "laptop_text": "💻 Laptop: solo si es imprescindible",
      "nevera": "off_morning", "battery_goal": "Subiendo"},
     {"start": 9 * 60, "end": 15 * 60, "label": "9:00 AM–3:00 PM",
-     "laptop": "💻 Laptop: ON, ventana principal",
+     "laptop": "full", "laptop_text": None,
      "nevera": "conditional_peak", "battery_goal": "65–75% a las 3 PM"},
     {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
-     "laptop": "💻 Laptop: solo si es necesario",
+     "laptop": "min", "laptop_text": "💻 Laptop: solo si es necesario",
      "nevera": "conditional_afternoon", "battery_goal": "Mantener"},
     {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
-     "laptop": "💻 Laptop: OFF",
+     "laptop": "off", "laptop_text": None,
      "nevera": "off_night", "battery_goal": "70%+ al anochecer"},
 ]
 
@@ -1098,59 +1098,83 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _frio_line(avg_soc) -> str:
+def _frio_status(avg_soc) -> tuple:
     """Regla 2: el frío es prioritario, se mantiene encendido siempre (hasta
     de noche) salvo emergencia de batería por debajo del 15%."""
     if avg_soc is not None and avg_soc < FRIO_EMERGENCY_THRESHOLD:
-        return f"🧊 Frío: EMERGENCIA — batería {avg_soc:.1f}%, apagar"
-    return "🧊 Frío: ON"
+        return "OFF", f"⚠️ Frío en EMERGENCIA — batería {avg_soc:.1f}%, apagar"
+    return "ON", None
 
 
-def _nevera_and_tv_lines(nevera_mode: str, pv_w, out_w) -> list:
+def _nevera_tv_status(nevera_mode: str, pv_w, out_w) -> tuple:
     """Regla 1: si la salida supera la entrada se apaga primero la NEVERA y,
-    si no alcanza, después la TV (umbral: los 100 W de la nevera)."""
+    si no alcanza, después la TV (umbral: los 100 W de la nevera). Devuelve
+    (estado_nevera, estado_tv, acción o None)."""
     pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
     out_str = f"{out_w} W" if out_w is not None else "N/D"
-    if nevera_mode == "off_morning":
-        return ["🥶 Nevera: OFF", "📺 TV: OFF"]
-    if nevera_mode == "off_night":
-        return ["🥶 Nevera: OFF", "📺 TV: OFF"]
+    if nevera_mode in ("off_morning", "off_night"):
+        return "OFF", "OFF", None
     excess = (out_w - pv_w) if (out_w is not None and pv_w is not None) else None
     if nevera_mode == "conditional_afternoon":
         if excess is not None and excess > 0:
-            return [f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: OFF"]
-        return [f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OFF"]
+            return "OFF", "OFF", f"⚠️ Apagar nevera (salida {out_str} > entrada {pv_str})"
+        return "ON", "OFF", None
     # conditional_peak (9 AM-3 PM), con TV en juego
     if excess is None or excess <= 0:
-        return [f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", "📺 TV: OK, ventana ideal (1 h)"]
+        return "ON", "ON", None
     if excess <= NEVERA_WATTS:
-        return [f"🥶 Nevera: APAGAR 30-40 min (salida {out_str} > entrada {pv_str})", "📺 TV: OK, alcanza con la nevera"]
-    return [f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", "📺 TV: apagar también"]
+        return "OFF", "ON", f"⚠️ Apagar nevera 30-40 min (salida {out_str} > entrada {pv_str})"
+    return "OFF", "OFF", f"⚠️ Apagar nevera y TV (salida {out_str} > entrada {pv_str})"
 
 
-def _powerbank_line(now) -> str:
+def _powerbank_status(now) -> str:
     minute_of_day = now.hour * 60 + now.minute
-    if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
-        return "🔋 Power bank: cargar (10 AM–2 PM)"
-    return "🔋 Power bank: OFF"
+    return "ON" if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN else "OFF"
 
 
 def build_load_advisor_message() -> str:
+    """Solo agrupa lo que está ON/OFF y destaca lo que realmente requiere una
+    decisión (⚠️): no repite una línea fija por cada carga si no hay nada que
+    evaluar en ella."""
     block = _current_load_block()
     if block is None:
         return ""
     now = datetime.now(TZ)
     m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    lines = [
-        f"🔆 *Gestión de cargas* · {block['label']}",
-        "✅ Internet: ON",
-        _frio_line(m["avg_soc"]),
-        block["laptop"],
-    ]
-    lines.extend(_nevera_and_tv_lines(block["nevera"], m["pv_w"], m["out_w"]))
-    lines.append("🌀 Ventilador: libre")
-    lines.append(_powerbank_line(now))
+
+    on_list = ["Internet", "Ventilador"]
+    off_list = []
+    actions = []
+
+    frio_status, frio_action = _frio_status(m["avg_soc"])
+    (on_list if frio_status == "ON" else off_list).append("Frío")
+    if frio_action:
+        actions.append(frio_action)
+
+    nevera_status, tv_status, nevera_action = _nevera_tv_status(block["nevera"], m["pv_w"], m["out_w"])
+    (on_list if nevera_status == "ON" else off_list).append("Nevera")
+    (on_list if tv_status == "ON" else off_list).append("TV")
+    if nevera_action:
+        actions.append(nevera_action)
+
+    (on_list if _powerbank_status(now) == "ON" else off_list).append("Power bank")
+
+    laptop_line = None
+    if block["laptop"] == "full":
+        on_list.append("Laptop")
+    elif block["laptop"] == "off":
+        off_list.append("Laptop")
+    else:
+        laptop_line = block["laptop_text"]
+
+    lines = [f"🔆 *Gestión de cargas* · {block['label']}"]
+    lines.append(f"🟢 ON: {', '.join(on_list)}")
+    if off_list:
+        lines.append(f"⚪ OFF: {', '.join(off_list)}")
+    if laptop_line:
+        lines.append(laptop_line)
+    lines.extend(actions)
     lines.append("")
     lines.append(f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})")
     return "\n".join(lines)
