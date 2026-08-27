@@ -594,7 +594,7 @@ def build_report() -> str:
     ]
     active_ports = [(name, w) for name, w in ports if w]
     if active_ports:
-        lines.append("🔌 *Puertos*")
+        lines.append("🔗 *Puertos*")
         for name, w in active_ports:
             lines.append(f"  {name}: {w} W")
         lines.append("")
