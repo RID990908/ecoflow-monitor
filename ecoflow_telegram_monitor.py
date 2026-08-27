@@ -78,7 +78,7 @@ DAILY_SUMMARY_HOUR = int(os.environ.get("DAILY_SUMMARY_HOUR", "22"))
 # funcionando igual, solo se pausa el informe periódico.
 QUIET_START_HOUR = int(os.environ.get("QUIET_START_HOUR", "23"))
 QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
-QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "6"))
+QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "7"))
 QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
 
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
@@ -453,6 +453,10 @@ def get_extra_battery_soc(data: dict):
     return _pick(data, "bms_slave.f32ShowSoc", "bms_slave.soc")
 
 
+_sent_message_ids = []
+_sent_message_lock = threading.Lock()
+
+
 def send_telegram(text: str, chat_id: str = None) -> None:
     resp = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -463,6 +467,10 @@ def send_telegram(text: str, chat_id: str = None) -> None:
     payload = resp.json()
     if not payload.get("ok"):
         raise RuntimeError(f"Telegram API error: {payload}")
+    msg_id = payload.get("result", {}).get("message_id")
+    if msg_id and (chat_id or CHAT_ID) == CHAT_ID:
+        with _sent_message_lock:
+            _sent_message_ids.append(msg_id)
 
 
 def set_bot_commands() -> None:
@@ -752,6 +760,46 @@ def quiet_hours_timer() -> None:
             log.exception("Error en el aviso de horario silencioso")
 
 
+WEEKLY_CLEANUP_WEEKDAY = int(os.environ.get("WEEKLY_CLEANUP_WEEKDAY", "6"))  # 0=lunes … 6=domingo
+WEEKLY_CLEANUP_HOUR = int(os.environ.get("WEEKLY_CLEANUP_HOUR", "4"))
+_last_cleanup_week = None
+
+
+def _delete_telegram_message(message_id: int) -> None:
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
+            json={"chat_id": CHAT_ID, "message_id": message_id},
+            timeout=15,
+        )
+    except Exception:
+        log.exception("No se pudo borrar el mensaje %s", message_id)
+
+
+def weekly_cleanup_timer() -> None:
+    """Borra una vez por semana los mensajes que mandó el bot (solo los
+    propios: Telegram no deja que un bot borre mensajes de chats privados que
+    mandó el usuario)."""
+    global _last_cleanup_week
+    while True:
+        time.sleep(600)
+        now = datetime.now(TZ)
+        week_key = now.isocalendar()[:2]
+        if now.weekday() != WEEKLY_CLEANUP_WEEKDAY or now.hour != WEEKLY_CLEANUP_HOUR or _last_cleanup_week == week_key:
+            continue
+        with _sent_message_lock:
+            ids = list(_sent_message_ids)
+            _sent_message_ids.clear()
+        for msg_id in ids:
+            _delete_telegram_message(msg_id)
+        _last_cleanup_week = week_key
+        log.info("Limpieza semanal: %d mensajes borrados", len(ids))
+        try:
+            send_telegram("🧹 Limpieza semanal del chat hecha.")
+        except Exception:
+            log.exception("Error avisando la limpieza semanal")
+
+
 FULL_CHARGE_THRESHOLD = 99  # % a partir del cual se considera "carga completa"
 FULL_CHARGE_RESET_THRESHOLD = 95  # baja de esto para poder volver a avisar
 
@@ -887,6 +935,7 @@ def main() -> None:
     threading.Thread(target=watchdog_timer, daemon=True).start()
     threading.Thread(target=daily_summary_timer, daemon=True).start()
     threading.Thread(target=quiet_hours_timer, daemon=True).start()
+    threading.Thread(target=weekly_cleanup_timer, daemon=True).start()
     if USE_PRIVATE_API:
         threading.Thread(target=start_private_mqtt, daemon=True).start()
 
