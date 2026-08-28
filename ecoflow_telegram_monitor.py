@@ -1035,7 +1035,11 @@ def watchdog_timer() -> None:
 # que la nevera) y 6:30-7:30 PM (según si la batería llegó sobrada al 75%).
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
-BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > frío/nevera > resto
+BATTERY_EMERGENCY_THRESHOLD = 35  # debajo de esto, prioridad estricta: internet > frío/nevera > resto.
+# Subido de 25 a 35 tras confirmar con logs reales que la batería igual seguía
+# cayendo a un dígito de madrugada: 25% dejaba muy poco margen de reacción
+# entre el aviso y quedarse sin carga. Objetivo ahora es sobrevivir el día,
+# no perseguir las metas del plan a toda costa.
 TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
 NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
 POWERBANK_START_MIN = 10 * 60
