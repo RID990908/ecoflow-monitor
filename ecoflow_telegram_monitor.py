@@ -1252,7 +1252,7 @@ def build_load_advisor_message(m: dict = None) -> str:
     estado real (watts, batería) en vez de ser un texto fijo. Internet no se
     muestra: es fija, siempre ON, no hay nada que decidir ni informar ahí.
     Prioridad: Internet > Nevera (protegidas, no compiten por excedente) >
-    Laptop > TV > Power bank > Ventilador — estas cuatro últimas se reparten
+    Laptop > Power bank > Ventilador > TV — estas cuatro últimas se reparten
     el MISMO excedente (system_net_w) en orden, restando lo que cada una se
     lleva antes de evaluar la siguiente. Antes cada una miraba el excedente
     total por separado, lo que podía mostrar varias en verde a la vez aunque
@@ -1289,8 +1289,6 @@ def build_load_advisor_message(m: dict = None) -> str:
         available = m["system_net_w"]
         laptop_ok, laptop_detail, available = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available)
         laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
-        tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
-        tv_line = _status_line("📺", "TV", tv_ok, ["tv"], tv_detail)
 
         pb_had_budget = available is None or available > 0
         pb_line, available = _multi_unit_line(
@@ -1302,6 +1300,9 @@ def build_load_advisor_message(m: dict = None) -> str:
             "🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available,
             "" if vent_had_budget else "sin excedente ahora mismo",
         )
+
+        tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
+        tv_line = _status_line("📺", "TV", tv_ok, ["tv"], tv_detail)
 
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
