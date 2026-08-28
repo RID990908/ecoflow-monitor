@@ -31,6 +31,7 @@ import random
 import sys
 import threading
 import time
+import unicodedata
 import uuid as uuid_lib
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -110,6 +111,23 @@ def _load_persisted_state() -> dict:
         return {}
 
 
+# Mapa de cargas que el usuario puede marcar ON/OFF a mano (por Telegram o el
+# panel web) para que el bot sepa qué está realmente encendido en vez de
+# asumirlo solo por el horario del plan. Los watts son los reales confirmados
+# por el usuario durante la sesión, se reusan para el chequeo de anomalía en
+# build_load_advisor_message().
+DEVICE_INFO = {
+    "frio": {"label": "Frío", "emoji": "🧊", "watts": 140},
+    "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
+    "laptop": {"label": "Laptop", "emoji": "💻", "watts": 160},
+    "tv": {"label": "TV", "emoji": "📺", "watts": 100},
+    "ventilador": {"label": "Ventiladores (2)", "emoji": "🌀", "watts": 40},
+    "powerbank": {"label": "Power banks (2)", "emoji": "🔋", "watts": 120},
+    "luces": {"label": "Luces (3)", "emoji": "💡", "watts": 60},
+}
+INTERNET_WATTS = 45  # promedio del rango 30-60 W, siempre ON, no se marca a mano
+
+
 def _save_persisted_state() -> None:
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -120,6 +138,7 @@ def _save_persisted_state() -> None:
                     "was_below_low_threshold": WAS_BELOW_LOW_THRESHOLD,
                     "was_full": WAS_FULL,
                     "last_ac_timestamp": LAST_AC_TIMESTAMP,
+                    "device_state": DEVICE_STATE,
                 },
                 f,
             )
@@ -133,6 +152,8 @@ BATTERY_LOW_THRESHOLD = _persisted.get("battery_low_threshold", 20)
 WAS_BELOW_LOW_THRESHOLD = _persisted.get("was_below_low_threshold", False)
 WAS_FULL = _persisted.get("was_full", False)
 LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
+_saved_device_state = _persisted.get("device_state", {})
+DEVICE_STATE = {key: bool(_saved_device_state.get(key, False)) for key in DEVICE_INFO}
 _DATA_STALE_ALERTED = False
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
@@ -477,6 +498,9 @@ def set_bot_commands() -> None:
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
         {"command": "cargas", "description": "Qué encender/apagar ahora según el plan"},
+        {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
+        {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off tv)"},
+        {"command": "estado", "description": "Ver qué marcaste encendido/apagado"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
@@ -741,6 +765,9 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
+    "/on <dispositivo> — marcarlo encendido (frio, nevera, laptop, tv, ventilador, powerbank, luces)\n"
+    "/off <dispositivo> — marcarlo apagado\n"
+    "/estado — ver qué marcaste encendido/apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
@@ -760,6 +787,29 @@ START_TEXT = (
 )
 
 
+_DEVICE_ALIASES = {
+    "tele": "tv", "television": "tv", "televisor": "tv",
+    "power": "powerbank", "bank": "powerbank", "powerbanks": "powerbank",
+    "ventiladores": "ventilador", "fan": "ventilador", "fans": "ventilador",
+    "pc": "laptop", "compu": "laptop", "computadora": "laptop",
+    "congelador": "frio", "freezer": "frio",
+    "luz": "luces", "light": "luces", "lights": "luces",
+}
+
+
+def _normalize_device(word: str):
+    """Saca acentos y matchea contra DEVICE_INFO (o un alias común). Devuelve
+    None si no reconoce el dispositivo."""
+    word = word.strip().lower()
+    word = "".join(c for c in unicodedata.normalize("NFD", word) if unicodedata.category(c) != "Mn")
+    word = _DEVICE_ALIASES.get(word, word)
+    return word if word in DEVICE_INFO else None
+
+
+def _device_state_lines() -> list:
+    return [f"{info['emoji']} {info['label']}: {'ON' if DEVICE_STATE[key] else 'OFF'}" for key, info in DEVICE_INFO.items()]
+
+
 def handle_command(text: str, chat_id: str) -> None:
     global BATTERY_LOW_THRESHOLD
     parts = text.strip().split()
@@ -774,6 +824,21 @@ def handle_command(text: str, chat_id: str) -> None:
                 "apagado desde las 12 AM hasta el amanecer."
             )
         send_telegram(msg, chat_id=chat_id)
+    elif cmd in ("/on", "/off"):
+        if len(parts) < 2:
+            send_telegram(f"Uso: {cmd} <dispositivo> — {', '.join(DEVICE_INFO)}", chat_id=chat_id)
+        else:
+            device = _normalize_device(parts[1])
+            if device is None:
+                send_telegram(f"No reconozco '{parts[1]}'. Dispositivos: {', '.join(DEVICE_INFO)}", chat_id=chat_id)
+            else:
+                DEVICE_STATE[device] = cmd == "/on"
+                _save_persisted_state()
+                info = DEVICE_INFO[device]
+                estado = "ON" if DEVICE_STATE[device] else "OFF"
+                send_telegram(f"{info['emoji']} {info['label']}: marcado {estado}", chat_id=chat_id)
+    elif cmd == "/estado":
+        send_telegram("📋 *Lo que marcaste encendido/apagado:*\n\n" + "\n".join(_device_state_lines()), chat_id=chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)
@@ -1037,16 +1102,17 @@ LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
 BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > frío/nevera > resto
 TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
-NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
+NEVERA_WATTS = DEVICE_INFO["nevera"]["watts"]  # para estimar si apagar la nevera alcanza para cubrir el exceso
 POWERBANK_START_MIN = 10 * 60
 POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
 
 # Watts reales de las cargas "resto" (manejables/despreciables), para poder
 # ordenar qué apagar primero por magnitud en vez de solo decir "apagar todo"
 # — cortando la más grande primero se cierra el déficit con menos pasos.
-LAPTOP_WATTS = 160
-TV_WATTS = 100
-POWERBANK_WATTS = 60
+# Reusan DEVICE_INFO para no tener el mismo watiaje duplicado en dos lugares.
+LAPTOP_WATTS = DEVICE_INFO["laptop"]["watts"]
+TV_WATTS = DEVICE_INFO["tv"]["watts"]
+POWERBANK_WATTS = DEVICE_INFO["powerbank"]["watts"]
 
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM",
@@ -1166,6 +1232,8 @@ def _priority_cut_order(block: dict, now) -> str:
     minute_of_day = now.hour * 60 + now.minute
     if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
         order.append(("Power bank", POWERBANK_WATTS))
+    if DEVICE_STATE.get("luces"):
+        order.append(("Luces", DEVICE_INFO["luces"]["watts"]))
     order.sort(key=lambda c: -c[1])
     if block["nevera"] != "off":
         order.append(("Nevera", NEVERA_WATTS))
@@ -1224,7 +1292,30 @@ def build_load_advisor_message() -> str:
             lines.append(f"✅ SE VA A CUMPLIR la meta: proyectás {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
         else:
             lines.append(f"⚠️ NO SE VA A CUMPLIR la meta: proyectás {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
+    mismatch = _device_mismatch_note(m["pv_w"], m["system_net_w"])
+    if mismatch:
+        lines.append(mismatch)
     return "\n".join(lines)
+
+
+DEVICE_MISMATCH_MARGIN_W = 100  # tolerancia (ciclado de compresores, ruido de medición) antes de avisar
+
+
+def _device_mismatch_note(pv_w, system_net_w):
+    """Compara el consumo real del sistema contra la suma de lo que el
+    usuario marcó encendido con /on — /off. Si no coincide por más del
+    margen, avisa que probablemente hay algo prendido/apagado que no está
+    reflejado en /estado."""
+    if pv_w is None or system_net_w is None:
+        return None
+    real_out = pv_w - system_net_w
+    expected = INTERNET_WATTS + sum(info["watts"] for key, info in DEVICE_INFO.items() if DEVICE_STATE.get(key))
+    diff = real_out - expected
+    if abs(diff) <= DEVICE_MISMATCH_MARGIN_W:
+        return None
+    if diff > 0:
+        return f"❓ Consumo real ({round(real_out)} W) supera lo marcado (~{expected} W) — puede haber algo más prendido que no marcaste con /on"
+    return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado y falta /off"
 
 
 def load_advisor_timer() -> None:
@@ -1342,6 +1433,15 @@ def battery_projection_timer() -> None:
 
 # --- Dashboard web: la misma info que el bot, en vivo, sin tener que pedirla ---
 PORT = int(os.environ.get("PORT", "8080"))
+
+
+def get_device_state_payload() -> dict:
+    return {
+        "devices": [
+            {"key": key, "label": info["label"], "emoji": info["emoji"], "watts": info["watts"], "on": DEVICE_STATE[key]}
+            for key, info in DEVICE_INFO.items()
+        ]
+    }
 
 
 def get_dashboard_status() -> dict:
@@ -1477,6 +1577,19 @@ DASHBOARD_HTML = """<!doctype html>
   .port-row .port-name { display: flex; align-items: center; gap: 6px; }
   .usb-svg { flex-shrink: 0; color: #9aa4af; }
   .port-row span:last-child { font-variant-numeric: tabular-nums; }
+  .devices { width: 100%; max-width: 380px; margin-top: 14px; }
+  .devices .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
+  .device-btn {
+    display: flex; justify-content: space-between; align-items: center; width: 100%;
+    font-size: 14px; padding: 8px 12px; margin-bottom: 6px; border-radius: 10px;
+    background: #141b22; border: 1px solid #232b33; color: #cbd5e1; cursor: pointer;
+    transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  }
+  .device-btn .name { display: flex; align-items: center; gap: 8px; }
+  .device-btn .state { font-weight: 700; font-size: 12px; letter-spacing: 0.03em; }
+  .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
+  .device-btn.on .state { color: #4ade80; }
+  .device-btn.off .state { color: #6b7684; }
   .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
   .live-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
@@ -1537,6 +1650,11 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="ports" id="ports-wrap" style="display:none">
     <div class="title">Puertos activos</div>
     <div id="ports"></div>
+  </div>
+
+  <div class="devices">
+    <div class="title">Qué tenés encendido</div>
+    <div id="devices"></div>
   </div>
 
   <div class="updated">
@@ -1681,9 +1799,46 @@ DASHBOARD_HTML = """<!doctype html>
       }
     }
 
+    // Panel de dispositivos: se refresca aparte (mucho menos seguido que el
+    // estado del EcoFlow) y solo vuelve a pedir datos cuando el usuario
+    // togglea algo, para no pisar un click en curso con un refresh automático.
+    async function loadDevices() {
+      try {
+        const res = await fetch('/api/devices');
+        const d = await res.json();
+        renderDevices(d.devices);
+      } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
+    }
+
+    function renderDevices(devices) {
+      document.getElementById('devices').innerHTML = devices.map(dev => `
+        <div class="device-btn ${dev.on ? 'on' : 'off'}" data-key="${dev.key}">
+          <span class="name">${dev.emoji} ${dev.label} · ${dev.watts}W</span>
+          <span class="state">${dev.on ? 'ON' : 'OFF'}</span>
+        </div>
+      `).join('');
+      document.querySelectorAll('.device-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const key = btn.dataset.key;
+          const turningOn = !btn.classList.contains('on');
+          try {
+            const res = await fetch('/api/devices', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ device: key, on: turningOn }),
+            });
+            const d = await res.json();
+            if (d.devices) renderDevices(d.devices);
+          } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
+        });
+      });
+    }
+
     refresh();
+    loadDevices();
     setInterval(refresh, 1000);
     setInterval(tickClock, 1000);
+    setInterval(loadDevices, 10000);
   </script>
 </body>
 </html>
@@ -1714,6 +1869,28 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._send(200, payload, "application/json")
             except Exception as exc:
                 payload = json.dumps({"ready": False, "error": str(exc)}).encode("utf-8")
+                self._send(500, payload, "application/json")
+        elif self.path == "/api/devices":
+            payload = json.dumps(get_device_state_payload()).encode("utf-8")
+            self._send(200, payload, "application/json")
+        else:
+            self._send(404, b"not found", "text/plain")
+
+    def do_POST(self):
+        if self.path == "/api/devices":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                device = _normalize_device(str(body.get("device", "")))
+                if device is None:
+                    self._send(400, b'{"error":"dispositivo desconocido"}', "application/json")
+                    return
+                DEVICE_STATE[device] = bool(body.get("on"))
+                _save_persisted_state()
+                payload = json.dumps(get_device_state_payload()).encode("utf-8")
+                self._send(200, payload, "application/json")
+            except Exception as exc:
+                payload = json.dumps({"error": str(exc)}).encode("utf-8")
                 self._send(500, payload, "application/json")
         else:
             self._send(404, b"not found", "text/plain")
