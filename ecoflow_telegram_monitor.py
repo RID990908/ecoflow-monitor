@@ -1035,11 +1035,7 @@ def watchdog_timer() -> None:
 # que la nevera) y 6:30-7:30 PM (según si la batería llegó sobrada al 75%).
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
-BATTERY_EMERGENCY_THRESHOLD = 35  # debajo de esto, prioridad estricta: internet > frío/nevera > resto.
-# Subido de 25 a 35 tras confirmar con logs reales que la batería igual seguía
-# cayendo a un dígito de madrugada: 25% dejaba muy poco margen de reacción
-# entre el aviso y quedarse sin carga. Objetivo ahora es sobrevivir el día,
-# no perseguir las metas del plan a toda costa.
+BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > frío/nevera > resto
 TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
 NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
 POWERBANK_START_MIN = 10 * 60
@@ -1222,16 +1218,21 @@ def load_advisor_timer() -> None:
 # --- Alerta dinámica de proyección: a diferencia del mensaje de /cargas (que
 # describe el plan), esto analiza el ritmo de descarga actual y proyecta si la
 # batería va a llegar por debajo de la meta del próximo checkpoint del plan
-# (~55-60% al mediodía, 65-75% a las 3 PM, 70%+ al anochecer). Avisa ANTES de que pase, no cuando
-# ya se descontroló. Chequea más seguido que el mensaje de 30 min para
-# reaccionar rápido a caídas bruscas.
+# (10% al amanecer, ~55-60% al mediodía, 65-75% a las 3 PM, 70%+ al cierre
+# del día). Los checkpoints son cíclicos: si ya pasaron todos los de hoy,
+# se proyecta contra el primero de mañana (el amanecer), cruzando la
+# medianoche — así de 8 PM en adelante el mensaje evalúa si vas a sobrevivir
+# la noche, no se queda mudo hasta el mediodía siguiente. Avisa ANTES de que
+# pase, no cuando ya se descontroló. Chequea más seguido que el mensaje de
+# 30 min para reaccionar rápido a caídas bruscas.
 PROJECTION_CHECK_MINUTES = 10
 PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
 BATTERY_CHECKPOINTS = [
+    (6 * 60, 10, "el amanecer"),
     (12 * 60, 55, "el mediodía"),
     (15 * 60, 65, "las 3:00 PM"),
     (19 * 60 + 30, 68, "el cierre del día (7:30 PM)"),
-]
+]  # ordenados por hora del día — el orden importa para _next_checkpoint
 
 _projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se avisó ese checkpoint
 
@@ -1241,21 +1242,24 @@ def _next_checkpoint(now):
     for cp_min, floor, label in BATTERY_CHECKPOINTS:
         if minute_of_day < cp_min:
             return cp_min, floor, label
-    return None
+    # ya pasaron todos los de hoy: el próximo es el primero de mañana (el amanecer)
+    return BATTERY_CHECKPOINTS[0]
 
 
 def _project_to_checkpoint(now, avg_soc, system_net_w):
     """Proyecta el %SOC combinado (Delta 2 + batería extra) en el próximo
     checkpoint del plan al ritmo de descarga actual. Devuelve
-    (label, floor, projected) o None si falta algún dato o no hay checkpoint
-    por delante. Lo usan tanto la alerta dinámica como la línea de proyección
-    del mensaje de /cargas."""
+    (label, floor, projected) o None si falta algún dato. El cálculo de
+    horas restantes cruza la medianoche si el checkpoint es de mañana (ej.
+    el amanecer, evaluado desde la noche anterior). Lo usan tanto la alerta
+    dinámica como la línea de proyección del mensaje de /cargas."""
     cp = _next_checkpoint(now)
     if cp is None or avg_soc is None or system_net_w is None:
         return None
     cp_min, floor, label = cp
     minute_of_day = now.hour * 60 + now.minute
-    hours_left = (cp_min - minute_of_day) / 60
+    minutes_left = (cp_min - minute_of_day) % (24 * 60)
+    hours_left = minutes_left / 60
     capacity_wh = BATTERY_CAPACITY_WH * 2
     projected = avg_soc + (system_net_w * hours_left) / capacity_wh * 100
     return label, floor, max(0.0, min(100.0, projected))
