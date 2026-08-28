@@ -783,12 +783,7 @@ HELP_TEXT = (
     "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
     "(65-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
 )
-START_TEXT = (
-    "👋 Hola, soy el monitor de tu EcoFlow.\n"
-    f"Te mando un informe automático a las :00 y :30 de cada hora (pausado de noche, de "
-    f"{QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a {QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) "
-    "y te aviso apenas empiece a cargar por corriente.\n\n" + HELP_TEXT
-)
+START_TEXT = "👋 Hola, soy el monitor de tu EcoFlow.\n\n" + HELP_TEXT
 
 
 _DEVICE_ALIASES = {
