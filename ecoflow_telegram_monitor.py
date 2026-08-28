@@ -1305,15 +1305,11 @@ def build_load_advisor_message(m: dict = None) -> str:
             laptop_detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
         laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
 
-        vent_had_budget = available is None or available > 0
         vent_line, available = _multi_unit_line(
-            "🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available,
-            "" if vent_had_budget else "sin excedente ahora mismo",
+            "🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available, "sin excedente para esto",
         )
-        pb_had_budget = available is None or available > 0
         pb_line, available = _multi_unit_line(
-            "🔋", "Power bank", POWERBANK_DEVICE_KEYS, available,
-            "" if pb_had_budget else "sin excedente ahora mismo",
+            "🔋", "Power bank", POWERBANK_DEVICE_KEYS, available, "sin excedente para esto",
         )
 
         tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
