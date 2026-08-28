@@ -1341,7 +1341,7 @@ def _device_mismatch_note(pv_w, system_net_w):
         return None
     if diff > 0:
         return f"❓ Consumo real ({round(real_out)} W) supera lo marcado (~{expected} W) — puede haber algo más prendido que no marcaste con /on"
-    return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado y falta /off"
+    return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado"
 
 
 WEAK_CHARGE_MIN_PV_W = 100  # sol mínimo para que tenga sentido evaluar el ritmo de carga
