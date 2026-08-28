@@ -1189,7 +1189,7 @@ def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detai
     return line
 
 
-def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, reason: str = "") -> str:
+def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, reason: str = "") -> tuple:
     """Para power bank / ventilador (varias unidades, cada una con
     su propio watiaje): un punto 🟢/🔴 por unidad, según si esa unidad
     puntual entra en el excedente disponible ahora mismo (orden acumulativo:
@@ -1198,7 +1198,11 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
     permitiendo en orden"). Aparte, entre paréntesis, cuántas de esas
     unidades están REALMENTE marcadas prendidas con /on — son datos
     distintos: uno es "cuánto aguanta el sistema", el otro es "qué tenés
-    prendido de verdad", y no tienen por qué coincidir."""
+    prendido de verdad", y no tienen por qué coincidir.
+
+    `available_w` ya viene descontado de lo que se llevaron las cargas de
+    mayor prioridad (ver _allocate_budget) — no es el excedente total del
+    sistema, es lo que queda para ESTA carga en particular."""
     remaining = max(0, available_w) if available_w is not None else 0
     dots = []
     for key in device_keys:
@@ -1212,7 +1216,21 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
     line = f"{emoji} {label}: {' '.join(dots)} ({on_count}/{len(device_keys)} marcadas)"
     if reason:
         line += f" — {reason}"
-    return line
+    return line, remaining
+
+
+def _allocate_budget(watts: int, available_w) -> tuple:
+    """Descuenta `watts` del excedente disponible si entra, y devuelve
+    (ok, detail, excedente_restante) — la pieza que permite que Laptop, TV,
+    Power bank y Ventilador se repartan el MISMO excedente en vez de que
+    cada uno lo evalúe por separado contra el total (eso hacía que
+    aparecieran varias en verde a la vez aunque juntas no entraran)."""
+    if available_w is None:
+        return True, "", None
+    remaining = max(0, available_w)
+    if watts <= remaining:
+        return True, "", remaining - watts
+    return False, f"necesita {watts} W, quedan {round(remaining)} W de excedente", remaining
 
 
 def _nevera_status(nevera_mode: str) -> tuple:
@@ -1225,17 +1243,6 @@ def _nevera_status(nevera_mode: str) -> tuple:
     return True, ""
 
 
-def _surplus_status(pv_w, system_net_w) -> tuple:
-    """Regla común para laptop y TV (cargas de una sola unidad, sin ventana
-    horaria): van en verde si el sistema no está en déficit real ahora
-    mismo, a cualquier hora del día."""
-    if system_net_w is None or system_net_w >= -NOISE_FLOOR_W:
-        return True, ""
-    pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
-    out_str = f"{round(pv_w - system_net_w)} W" if pv_w is not None else "N/D"
-    return False, f"salida {out_str} > entrada {pv_str}"
-
-
 POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
 VENTILADOR_DEVICE_KEYS = [f"ventilador{i}" for i in range(1, MULTI_UNIT_DEVICES["ventilador"][0] + 1)]
 
@@ -1244,10 +1251,15 @@ def build_load_advisor_message(m: dict = None) -> str:
     """Nevera, Laptop, TV, Power bank y Ventilador — cada una ya evalúa el
     estado real (watts, batería) en vez de ser un texto fijo. Internet no se
     muestra: es fija, siempre ON, no hay nada que decidir ni informar ahí.
-    Prioridad: Internet > Nevera > resto (laptop, TV, power bank). Por
-    debajo de BATTERY_EMERGENCY_THRESHOLD se apaga TODO menos internet — no
-    alcanza con bajar solo la nevera si el resto sigue mostrando 'ON' como si
-    nada, porque son de menor prioridad y deben ceder primero/junto con ella."""
+    Prioridad: Internet > Nevera (protegidas, no compiten por excedente) >
+    Laptop > TV > Power bank > Ventilador — estas cuatro últimas se reparten
+    el MISMO excedente (system_net_w) en orden, restando lo que cada una se
+    lleva antes de evaluar la siguiente. Antes cada una miraba el excedente
+    total por separado, lo que podía mostrar varias en verde a la vez aunque
+    juntas no entraran. Por debajo de BATTERY_EMERGENCY_THRESHOLD se apaga
+    TODO menos internet — no alcanza con bajar solo la nevera si el resto
+    sigue mostrando 'ON' como si nada, porque son de menor prioridad y deben
+    ceder primero/junto con ella."""
     block = _current_load_block()
     if block is None:
         return ""
@@ -1258,34 +1270,46 @@ def build_load_advisor_message(m: dict = None) -> str:
     emergency = block["nevera"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
 
     if emergency:
+        pb_line, _ = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0)
+        vent_line, _ = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0)
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
             _status_line("🥶", "Nevera", False, ["nevera"]),
             _status_line("💻", "Laptop", False, ["laptop"]),
             _status_line("📺", "TV", False, ["tv"]),
-            _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0),
-            _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0),
+            pb_line,
+            vent_line,
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
     else:
         nevera_ok, nevera_detail = _nevera_status(block["nevera"])
-        laptop_ok, laptop_detail = _surplus_status(m["pv_w"], m["system_net_w"])
-        tv_ok, tv_detail = _surplus_status(m["pv_w"], m["system_net_w"])
+
+        available = m["system_net_w"]
+        laptop_ok, laptop_detail, available = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available)
         laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
-        pb_available_w = m["system_net_w"]
-        pb_reason = "sin excedente ahora mismo" if (pb_available_w is None or pb_available_w <= 0) else ""
+        tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
+        tv_line = _status_line("📺", "TV", tv_ok, ["tv"], tv_detail)
+
+        pb_had_budget = available is None or available > 0
+        pb_line, available = _multi_unit_line(
+            "🔋", "Power bank", POWERBANK_DEVICE_KEYS, available,
+            "" if pb_had_budget else "sin excedente ahora mismo",
+        )
+        vent_had_budget = available is None or available > 0
+        vent_line, available = _multi_unit_line(
+            "🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available,
+            "" if vent_had_budget else "sin excedente ahora mismo",
+        )
+
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
             laptop_line,
-            _status_line("📺", "TV", tv_ok, ["tv"], tv_detail),
-            _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, pb_available_w, pb_reason),
-            _multi_unit_line(
-                "🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, m["system_net_w"],
-                "sin excedente ahora mismo" if (m["system_net_w"] is None or m["system_net_w"] <= 0) else "",
-            ),
+            tv_line,
+            pb_line,
+            vent_line,
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
