@@ -1183,21 +1183,39 @@ def _current_load_block(now=None) -> dict:
 def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detail: str = "") -> str:
     """Une los dos conceptos que antes se confundían bajo el mismo 'ON/OFF':
     el semáforo (🟢/🔴) es lo que dice el PLAN (¿se puede tener encendido
-    ahora?), y el texto es lo que vos marcaste de verdad con /on-/off — son
-    cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan dice que había
-    que apagarlo pero lo tenés marcado prendido). Con una sola unidad
-    (device_keys de largo 1) el texto es ON/OFF; con varias (power bank,
-    ventilador, luces) muestra cuántas de las N están marcadas prendidas."""
+    ahora?), y el texto ON/OFF es lo que vos marcaste de verdad con
+    /on-/off — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
+    dice que había que apagarlo pero lo tenés marcado prendido). Para nevera,
+    laptop y TV (una sola unidad cada una)."""
     dot = "🟢" if plan_ok else "🔴"
-    if len(device_keys) == 1:
-        state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
-    else:
-        on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
-        state_text = f"{on_count}/{len(device_keys)}"
+    state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
     line = f"{emoji} {label}: {dot} {state_text}"
     if detail:
         line += f" ({detail})"
     return line
+
+
+def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> str:
+    """Para power bank / ventilador / luces (varias unidades, cada una con
+    su propio watiaje): un punto 🟢/🔴 por unidad, según si esa unidad
+    puntual entra en el excedente disponible ahora mismo (orden acumulativo:
+    la primera que no entra dice 🔴, y de ahí en más también, aunque
+    individualmente pesen menos — es la lógica de "qué te podés ir
+    permitiendo en orden"). Aparte, entre paréntesis, cuántas de esas
+    unidades están REALMENTE marcadas prendidas con /on — son datos
+    distintos: uno es "cuánto aguanta el sistema", el otro es "qué tenés
+    prendido de verdad", y no tienen por qué coincidir."""
+    remaining = max(0, available_w) if available_w is not None else 0
+    dots = []
+    for key in device_keys:
+        watts = DEVICE_INFO[key]["watts"]
+        if watts <= remaining:
+            dots.append("🟢")
+            remaining -= watts
+        else:
+            dots.append("🔴")
+    on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
+    return f"{emoji} {label}: {' '.join(dots)} ({on_count}/{len(device_keys)} marcadas)"
 
 
 def _nevera_status(nevera_mode: str) -> tuple:
@@ -1265,16 +1283,17 @@ def build_load_advisor_message(m: dict = None) -> str:
             _status_line("🥶", "Nevera", False, ["nevera"]),
             _status_line("💻", "Laptop", False, ["laptop"]),
             _status_line("📺", "TV", False, ["tv"]),
-            _status_line("🔋", "Power bank", False, POWERBANK_DEVICE_KEYS),
-            _status_line("🌀", "Ventilador", False, VENTILADOR_DEVICE_KEYS),
-            _status_line("💡", "Luces", False, LUCES_DEVICE_KEYS),
+            _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0),
+            _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0),
+            _multi_unit_line("💡", "Luces", LUCES_DEVICE_KEYS, 0),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
     else:
         nevera_ok, nevera_detail = _nevera_status(block["nevera"])
         tv_ok, tv_detail = _tv_status(block["tv"], m["pv_w"], m["system_net_w"], m["avg_soc"])
-        pb_ok, pb_detail = _powerbank_status(now)
+        pb_ok, _pb_detail = _powerbank_status(now)
+        pb_available_w = m["system_net_w"] if pb_ok else 0
         if block["laptop"] == "full":
             laptop_line = _status_line("💻", "Laptop", True, ["laptop"])
         elif block["laptop"] == "off":
@@ -1287,9 +1306,9 @@ def build_load_advisor_message(m: dict = None) -> str:
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
             laptop_line,
             _status_line("📺", "TV", tv_ok, ["tv"], tv_detail),
-            _status_line("🔋", "Power bank", pb_ok, POWERBANK_DEVICE_KEYS, pb_detail),
-            _status_line("🌀", "Ventilador", True, VENTILADOR_DEVICE_KEYS),
-            _status_line("💡", "Luces", True, LUCES_DEVICE_KEYS),
+            _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, pb_available_w),
+            _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, m["system_net_w"]),
+            _multi_unit_line("💡", "Luces", LUCES_DEVICE_KEYS, m["system_net_w"]),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
