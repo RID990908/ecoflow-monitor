@@ -1218,12 +1218,13 @@ def load_advisor_timer() -> None:
 # --- Alerta dinámica de proyección: a diferencia del mensaje de /cargas (que
 # describe el plan), esto analiza el ritmo de descarga actual y proyecta si la
 # batería va a llegar por debajo de la meta del próximo checkpoint del plan
-# (65-75% a las 3 PM, 70%+ al anochecer). Avisa ANTES de que pase, no cuando
+# (~55-60% al mediodía, 65-75% a las 3 PM, 70%+ al anochecer). Avisa ANTES de que pase, no cuando
 # ya se descontroló. Chequea más seguido que el mensaje de 30 min para
 # reaccionar rápido a caídas bruscas.
 PROJECTION_CHECK_MINUTES = 10
 PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
 BATTERY_CHECKPOINTS = [
+    (12 * 60, 55, "el mediodía"),
     (15 * 60, 65, "las 3:00 PM"),
     (19 * 60 + 30, 68, "el cierre del día (7:30 PM)"),
 ]
