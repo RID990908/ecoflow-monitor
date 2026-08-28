@@ -1296,6 +1296,8 @@ def build_load_advisor_message(m: dict = None) -> str:
 
         available = m["system_net_w"]
         laptop_ok, laptop_detail, available = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available)
+        if laptop_ok or not DEVICE_STATE.get("laptop"):
+            laptop_detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
         laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
 
         vent_had_budget = available is None or available > 0
@@ -1310,6 +1312,8 @@ def build_load_advisor_message(m: dict = None) -> str:
         )
 
         tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
+        if tv_ok or not DEVICE_STATE.get("tv"):
+            tv_detail = ""
         tv_line = _status_line("📺", "TV", tv_ok, ["tv"], tv_detail)
 
         lines = [
