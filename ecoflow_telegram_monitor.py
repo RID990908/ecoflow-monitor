@@ -1281,6 +1281,9 @@ def build_load_advisor_message(m: dict = None) -> str:
     mismatch = _device_mismatch_note(m["pv_w"], m["system_net_w"])
     if mismatch:
         lines.append(mismatch)
+    imbalance = _battery_imbalance_note(m["soc_delta2"], m["soc_extra"])
+    if imbalance:
+        lines.append(imbalance)
     return "\n".join(lines)
 
 
@@ -1302,6 +1305,26 @@ def _device_mismatch_note(pv_w, system_net_w):
     if diff > 0:
         return f"❓ Consumo real ({round(real_out)} W) supera lo marcado (~{expected} W) — puede haber algo más prendido que no marcaste con /on"
     return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado y falta /off"
+
+
+BATTERY_IMBALANCE_THRESHOLD = 15  # puntos porcentuales de diferencia entre Delta 2 y la extra para avisar
+
+
+def _battery_imbalance_note(soc_delta2, soc_extra):
+    """Las recomendaciones (TV, meta, proyección) usan el promedio/total
+    combinado de las dos baterías — eso puede tapar que una esté mucho peor
+    que la otra. Como la prioridad real es la carga (sin carga no hay nada
+    que gestionar), se avisa aparte cuando el desbalance es grande."""
+    if soc_delta2 is None or soc_extra is None:
+        return None
+    gap = abs(soc_delta2 - soc_extra)
+    if gap < BATTERY_IMBALANCE_THRESHOLD:
+        return None
+    if soc_delta2 < soc_extra:
+        lower_name, lower_pct, higher_pct = "Delta 2", soc_delta2, soc_extra
+    else:
+        lower_name, lower_pct, higher_pct = "Batería Extra", soc_extra, soc_delta2
+    return f"⚖️ Desbalance: {lower_name} bastante más baja ({lower_pct:.1f}% vs {higher_pct:.1f}%) — el total/promedio lo tapa"
 
 
 
