@@ -505,7 +505,6 @@ def set_bot_commands() -> None:
         {"command": "cargas", "description": "Qué encender/apagar ahora según el plan"},
         {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
         {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off tv)"},
-        {"command": "estado", "description": "Ver qué marcaste encendido/apagado"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
@@ -773,7 +772,6 @@ HELP_TEXT = (
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
     "/on <dispositivo> — marcarlo encendido (nevera, laptop, tv, ventilador, powerbank, luces)\n"
     "/off <dispositivo> — marcarlo apagado\n"
-    "/estado — ver qué marcaste encendido/apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
@@ -825,10 +823,6 @@ def _resolve_device_keys(word: str) -> list:
     return [base] if base in DEVICE_INFO else []
 
 
-def _device_state_lines() -> list:
-    return [f"{info['emoji']} {info['label']}: {'ON' if DEVICE_STATE[key] else 'OFF'}" for key, info in DEVICE_INFO.items()]
-
-
 def handle_command(text: str, chat_id: str) -> None:
     global BATTERY_LOW_THRESHOLD
     parts = text.strip().split()
@@ -857,8 +851,6 @@ def handle_command(text: str, chat_id: str) -> None:
                 _save_persisted_state()
                 lines = [f"{DEVICE_INFO[k]['emoji']} {DEVICE_INFO[k]['label']}: marcado {estado}" for k in keys]
                 send_telegram("\n".join(lines), chat_id=chat_id)
-    elif cmd == "/estado":
-        send_telegram("📋 *Lo que marcaste encendido/apagado:*\n\n" + "\n".join(_device_state_lines()), chat_id=chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)
@@ -1191,12 +1183,17 @@ def _current_load_block(now=None) -> dict:
 def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detail: str = "") -> str:
     """Une los dos conceptos que antes se confundían bajo el mismo 'ON/OFF':
     el semáforo (🟢/🔴) es lo que dice el PLAN (¿se puede tener encendido
-    ahora?), y el texto ON/OFF es lo que vos marcaste de verdad en
-    /estado — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
-    dice que había que apagarlo pero lo tenés marcado prendido)."""
+    ahora?), y el texto es lo que vos marcaste de verdad con /on-/off — son
+    cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan dice que había
+    que apagarlo pero lo tenés marcado prendido). Con una sola unidad
+    (device_keys de largo 1) el texto es ON/OFF; con varias (power bank,
+    ventilador, luces) muestra cuántas de las N están marcadas prendidas."""
     dot = "🟢" if plan_ok else "🔴"
-    actual_on = any(DEVICE_STATE.get(k) for k in device_keys)
-    state_text = "ON" if actual_on else "OFF"
+    if len(device_keys) == 1:
+        state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
+    else:
+        on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
+        state_text = f"{on_count}/{len(device_keys)}"
     line = f"{emoji} {label}: {dot} {state_text}"
     if detail:
         line += f" ({detail})"
@@ -1239,6 +1236,8 @@ def _powerbank_status(now) -> tuple:
 
 
 POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
+VENTILADOR_DEVICE_KEYS = [f"ventilador{i}" for i in range(1, MULTI_UNIT_DEVICES["ventilador"][0] + 1)]
+LUCES_DEVICE_KEYS = [f"luces{i}" for i in range(1, MULTI_UNIT_DEVICES["luces"][0] + 1)]
 
 
 def build_load_advisor_message(m: dict = None) -> str:
@@ -1267,6 +1266,8 @@ def build_load_advisor_message(m: dict = None) -> str:
             _status_line("💻", "Laptop", False, ["laptop"]),
             _status_line("📺", "TV", False, ["tv"]),
             _status_line("🔋", "Power bank", False, POWERBANK_DEVICE_KEYS),
+            _status_line("🌀", "Ventilador", False, VENTILADOR_DEVICE_KEYS),
+            _status_line("💡", "Luces", False, LUCES_DEVICE_KEYS),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
@@ -1287,6 +1288,8 @@ def build_load_advisor_message(m: dict = None) -> str:
             laptop_line,
             _status_line("📺", "TV", tv_ok, ["tv"], tv_detail),
             _status_line("🔋", "Power bank", pb_ok, POWERBANK_DEVICE_KEYS, pb_detail),
+            _status_line("🌀", "Ventilador", True, VENTILADOR_DEVICE_KEYS),
+            _status_line("💡", "Luces", True, LUCES_DEVICE_KEYS),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
@@ -1313,7 +1316,7 @@ def _device_mismatch_note(pv_w, system_net_w):
     """Compara el consumo real del sistema contra la suma de lo que el
     usuario marcó encendido con /on — /off. Si no coincide por más del
     margen, avisa que probablemente hay algo prendido/apagado que no está
-    reflejado en /estado."""
+    marcado con /on-/off."""
     if pv_w is None or system_net_w is None:
         return None
     real_out = pv_w - system_net_w
