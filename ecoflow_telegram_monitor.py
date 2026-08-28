@@ -1024,7 +1024,7 @@ def watchdog_timer() -> None:
 # que la nevera) y 6:30-7:30 PM (según si la batería llegó sobrada al 75%).
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
-FRIO_EMERGENCY_THRESHOLD = 25  # regla 2: en horas "on", el frío solo se apaga en emergencia (<25%)
+BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > frío/nevera > resto
 TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
 NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el exceso de salida
 POWERBANK_START_MIN = 10 * 60
@@ -1070,14 +1070,13 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _frio_line(frio_mode: str, avg_soc) -> str:
+def _frio_line(frio_mode: str) -> str:
     """Regla 2 y 3: el frío es prioritario de día y a la primera parte de la
-    noche (solo se apaga en emergencia de batería <25%); a las 12 AM se apaga
-    programado porque ya acumuló frío todo el día y aguanta hasta el amanecer."""
+    noche; a las 12 AM se apaga programado porque ya acumuló frío todo el día
+    y aguanta hasta el amanecer. El caso de emergencia de batería se maneja
+    aparte en build_load_advisor_message (ahí apaga todo, no solo el frío)."""
     if frio_mode == "off_midnight":
         return "🧊 Frío: OFF (apagado a las 12 AM, acumuló frío todo el día)"
-    if avg_soc is not None and avg_soc < FRIO_EMERGENCY_THRESHOLD:
-        return f"🧊 Frío: EMERGENCIA — batería {avg_soc:.1f}%, apagar"
     return "🧊 Frío: ON"
 
 
@@ -1138,31 +1137,52 @@ def _laptop_line(block: dict) -> str:
 def build_load_advisor_message() -> str:
     """Seis líneas fijas (Internet, Frío, Laptop, Nevera, TV, Power bank) pero
     cada una ya evalúa el estado real (watts, batería) en vez de ser un texto
-    fijo — no se agrega el ventilador porque nunca hay nada que decidir ahí."""
+    fijo — no se agrega el ventilador porque nunca hay nada que decidir ahí.
+    Prioridad: Internet > Frío/Nevera > resto (laptop, TV, power bank). Por
+    debajo de BATTERY_EMERGENCY_THRESHOLD se apaga TODO menos internet — no
+    alcanza con bajar solo el frío si el resto sigue mostrando 'ON' como si
+    nada, porque son de menor prioridad y deben ceder primero/junto con él."""
     block = _current_load_block()
     if block is None:
         return ""
     now = datetime.now(TZ)
     m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    nevera_line, excess = _nevera_line(block["nevera"], m["pv_w"], m["system_net_w"])
-    lines = [
-        f"🔆 *Gestión de cargas* · {block['label']}",
-        "✅ Internet: ON",
-        _frio_line(block["frio"], m["avg_soc"]),
-        _laptop_line(block),
-        nevera_line,
-        _tv_line(block["tv"], excess, m["avg_soc"]),
-        _powerbank_line(now),
-        "",
-        f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
-    ]
+    emergency = block["frio"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
+
+    if emergency:
+        lines = [
+            f"🔆 *Gestión de cargas* · {block['label']}",
+            f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
+            "✅ Internet: ON",
+            "🧊 Frío: APAGAR",
+            "🥶 Nevera: APAGAR",
+            "💻 Laptop: APAGAR",
+            "📺 TV: OFF",
+            "🔋 Power bank: OFF",
+            "",
+            f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
+        ]
+    else:
+        nevera_line, excess = _nevera_line(block["nevera"], m["pv_w"], m["system_net_w"])
+        lines = [
+            f"🔆 *Gestión de cargas* · {block['label']}",
+            "✅ Internet: ON",
+            _frio_line(block["frio"]),
+            _laptop_line(block),
+            nevera_line,
+            _tv_line(block["tv"], excess, m["avg_soc"]),
+            _powerbank_line(now),
+            "",
+            f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
+        ]
     proj = _project_to_checkpoint(now, m["avg_soc"], m["system_net_w"])
     if proj:
         proj_label, proj_floor, proj_pct = proj
-        ok = proj_pct >= proj_floor
-        emoji = "✅" if ok else "⚠️"
-        lines.append(f"{emoji} Proyección: {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
+        if proj_pct >= proj_floor:
+            lines.append(f"✅ SE VA A CUMPLIR la meta: proyectás {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
+        else:
+            lines.append(f"⚠️ NO SE VA A CUMPLIR la meta: proyectás {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
     return "\n".join(lines)
 
 
