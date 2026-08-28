@@ -118,7 +118,7 @@ def _load_persisted_state() -> dict:
 # build_load_advisor_message(). Las cargas con más de una unidad (ventilador,
 # power bank, luces) se desglosan una por una en vez de un solo interruptor
 # combinado, para poder marcar exactamente cuáles están prendidas.
-MULTI_UNIT_DEVICES = {"ventilador": (2, "Ventilador", "🌀", 20), "powerbank": (2, "Power bank", "🔋", 60), "luces": (3, "Luz", "💡", 20)}
+MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": (2, "Power bank", "🔋", 60), "luces": (3, "Luz", "💡", 20)}
 
 DEVICE_INFO = {
     "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
@@ -128,6 +128,7 @@ DEVICE_INFO = {
 for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
     for _i in range(1, _count + 1):
         DEVICE_INFO[f"{_base}{_i}"] = {"label": f"{_label} {_i}", "emoji": _emoji, "watts": _watts}
+DEVICE_INFO["ventilador3"]["watts"] = 10  # el tercer ventilador es más chico que los otros dos (20W)
 
 INTERNET_WATTS = 45  # promedio del rango 30-60 W, siempre ON, no se marca a mano
 
@@ -1281,9 +1282,9 @@ def build_load_advisor_message(m: dict = None) -> str:
     mismatch = _device_mismatch_note(m["pv_w"], m["system_net_w"])
     if mismatch:
         lines.append(mismatch)
-    imbalance = _battery_imbalance_note(m["soc_delta2"], m["soc_extra"])
-    if imbalance:
-        lines.append(imbalance)
+    weak_charge = _weak_charge_note(m["pv_w"], m["delta2_net_w"], m["extra_net_w"])
+    if weak_charge:
+        lines.append(weak_charge)
     return "\n".join(lines)
 
 
@@ -1307,24 +1308,27 @@ def _device_mismatch_note(pv_w, system_net_w):
     return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado y falta /off"
 
 
-BATTERY_IMBALANCE_THRESHOLD = 15  # puntos porcentuales de diferencia entre Delta 2 y la extra para avisar
+WEAK_CHARGE_MIN_PV_W = 100  # sol mínimo para que tenga sentido evaluar el ritmo de carga
+WEAK_CHARGE_RATE_W = 30  # por debajo de esto, con sol disponible, se considera carga débil
 
 
-def _battery_imbalance_note(soc_delta2, soc_extra):
-    """Las recomendaciones (TV, meta, proyección) usan el promedio/total
-    combinado de las dos baterías — eso puede tapar que una esté mucho peor
-    que la otra. Como la prioridad real es la carga (sin carga no hay nada
-    que gestionar), se avisa aparte cuando el desbalance es grande."""
-    if soc_delta2 is None or soc_extra is None:
+def _weak_charge_note(pv_w, delta2_net_w, extra_net_w):
+    """La prioridad real es la carga en sí (sin carga no hay nada que
+    gestionar) — esto chequea si cada batería está cargando a buen ritmo
+    cuando hay sol de sobra, no solo si el signo es positivo. Una batería
+    que "carga" a +5 W con 300 W de sol disponible tiene un problema real
+    (mala conexión, límite del BMS, etc.) que el total/promedio combinado no
+    deja ver."""
+    if pv_w is None or pv_w < WEAK_CHARGE_MIN_PV_W:
         return None
-    gap = abs(soc_delta2 - soc_extra)
-    if gap < BATTERY_IMBALANCE_THRESHOLD:
+    problems = []
+    if delta2_net_w is not None and 0 < delta2_net_w < WEAK_CHARGE_RATE_W:
+        problems.append(f"Delta 2 (+{round(delta2_net_w)} W)")
+    if extra_net_w is not None and 0 < extra_net_w < WEAK_CHARGE_RATE_W:
+        problems.append(f"Batería Extra (+{round(extra_net_w)} W)")
+    if not problems:
         return None
-    if soc_delta2 < soc_extra:
-        lower_name, lower_pct, higher_pct = "Delta 2", soc_delta2, soc_extra
-    else:
-        lower_name, lower_pct, higher_pct = "Batería Extra", soc_extra, soc_delta2
-    return f"⚖️ Desbalance: {lower_name} bastante más baja ({lower_pct:.1f}% vs {higher_pct:.1f}%) — el total/promedio lo tapa"
+    return f"🐌 Carga débil: {' y '.join(problems)} — con {pv_w} W de sol debería cargar más rápido"
 
 
 
