@@ -1201,6 +1201,10 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
     en vez de un conteo aparte. Si TODAS las unidades están marcadas, se
     resume con un solo ✅ al final en vez de repetir el ✓ en cada una.
 
+    `reason` solo se muestra si hace falta actuar: alguna unidad marcada
+    ON de verdad está en rojo (habría que apagarla). Si todo lo que está
+    en rojo ya está OFF, no hay nada que decidir y no se muestra.
+
     `available_w` ya viene descontado de lo que se llevaron las cargas de
     mayor prioridad (ver _allocate_budget) — no es el excedente total del
     sistema, es lo que queda para ESTA carga en particular."""
@@ -1222,7 +1226,8 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
             for dot, key in zip(dots, device_keys)
         )
     line = f"{emoji} {label}: {dots_str}"
-    if reason:
+    actionable = any(DEVICE_STATE.get(key) and dot == "🔴" for key, dot in zip(device_keys, dots))
+    if reason and actionable:
         line += f" — {reason}"
     return line, remaining
 
