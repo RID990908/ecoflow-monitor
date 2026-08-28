@@ -1345,21 +1345,16 @@ WEAK_CHARGE_RATE_W = 30  # por debajo de esto, con sol disponible, se considera 
 
 def _weak_charge_note(pv_w, delta2_net_w, extra_net_w):
     """La prioridad real es la carga en sí (sin carga no hay nada que
-    gestionar) — esto chequea si cada batería está cargando a buen ritmo
-    cuando hay sol de sobra, no solo si el signo es positivo. Una batería
-    que "carga" a +5 W con 300 W de sol disponible tiene un problema real
-    (mala conexión, límite del BMS, etc.) que el total/promedio combinado no
-    deja ver."""
+    gestionar) — esto chequea si la batería externa está cargando a buen
+    ritmo cuando hay sol de sobra, no solo si el signo es positivo. Una
+    batería que "carga" a +5 W con 300 W de sol disponible tiene un
+    problema real (mala conexión, límite del BMS, etc.) que el
+    total/promedio combinado no deja ver."""
     if pv_w is None or pv_w < WEAK_CHARGE_MIN_PV_W:
         return None
-    problems = []
-    if delta2_net_w is not None and 0 < delta2_net_w < WEAK_CHARGE_RATE_W:
-        problems.append(f"Delta 2 (+{round(delta2_net_w)} W)")
     if extra_net_w is not None and 0 < extra_net_w < WEAK_CHARGE_RATE_W:
-        problems.append(f"Batería Extra (+{round(extra_net_w)} W)")
-    if not problems:
-        return None
-    return f"🐌 Carga débil: {' y '.join(problems)} — con {pv_w} W de sol debería cargar más rápido"
+        return "🐌 Carga débil de la batería externa"
+    return None
 
 
 
