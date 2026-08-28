@@ -1204,13 +1204,13 @@ def _tv_line(tv_mode: str, pv_w, system_net_w, avg_soc) -> str:
     porque está protegida) y noche (batería sobrada al 75%)."""
     if tv_mode == "peak":
         if system_net_w is None or system_net_w >= -NOISE_FLOOR_W:
-            return "📺 TV: podés ponerla (1 h)"
+            return "📺 TV: podés ponerla"
         pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
         out_str = f"{round(pv_w - system_net_w)} W" if pv_w is not None else "N/D"
         return f"📺 TV: OFF (salida {out_str} > entrada {pv_str})"
     if tv_mode == "evening":
         if avg_soc is not None and avg_soc >= TV_EVENING_THRESHOLD:
-            return "📺 TV: podés ponerla (1 h), llegaste sobrado al anochecer"
+            return "📺 TV: podés ponerla, llegaste sobrado al anochecer"
         soc_str = f"{avg_soc:.1f}%" if avg_soc is not None else "N/D"
         return f"📺 TV: OFF (necesita {TV_EVENING_THRESHOLD}%+, vas en {soc_str})"
     return "📺 TV: OFF"
@@ -1219,7 +1219,7 @@ def _tv_line(tv_mode: str, pv_w, system_net_w, avg_soc) -> str:
 def _powerbank_line(now) -> str:
     minute_of_day = now.hour * 60 + now.minute
     if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
-        return "🔋 Power bank: podés cargarlas (10 AM–2 PM)"
+        return "🔋 Power bank: podés cargarlas"
     return "🔋 Power bank: OFF"
 
 
