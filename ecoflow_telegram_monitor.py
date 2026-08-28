@@ -1210,7 +1210,7 @@ def _tv_line(tv_mode: str, pv_w, system_net_w, avg_soc) -> str:
         return f"📺 TV: OFF (salida {out_str} > entrada {pv_str})"
     if tv_mode == "evening":
         if avg_soc is not None and avg_soc >= TV_EVENING_THRESHOLD:
-            return "📺 TV: OK (1 h), llegaste sobrado al anochecer"
+            return "📺 TV: podés ponerla o no, llegaste sobrado al anochecer (1 h)"
         soc_str = f"{avg_soc:.1f}%" if avg_soc is not None else "N/D"
         return f"📺 TV: OFF (necesita {TV_EVENING_THRESHOLD}%+, vas en {soc_str})"
     return "📺 TV: OFF"
