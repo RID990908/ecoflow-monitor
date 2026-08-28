@@ -1860,8 +1860,24 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         # viejo mientras la API ya cambió de forma — como pasó una vez con
         # extra_in_w/extra_out_w renombrados a extra_net_w ("undefined W" en pantalla).
         self.send_header("Cache-Control", "no-store")
+        # Sin esto, cualquier front separado (la app de Expo en Vercel, por
+        # ejemplo) que llame a esta API desde otro dominio se queda bloqueada
+        # por CORS del lado del navegador — la app nativa no lo sufre (no
+        # aplica CORS), por eso pasaba desapercibido hasta que se desplegó la
+        # versión web. No hay sesión ni cookies acá, así que "*" es seguro.
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        # Preflight de CORS para el POST de /api/devices (lleva Content-Type:
+        # application/json, así que el navegador manda OPTIONS antes).
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
