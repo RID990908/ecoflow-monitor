@@ -675,10 +675,10 @@ def _gather_metrics(passive: bool = False) -> dict:
         threshold_line = _time_to_threshold_line(soc_delta2, delta2_net_w, 1, 20)
 
     ports = [
-        ("USB-C 1", _pick(data, "pd.typec1Watts")),
-        ("USB-C 2", _pick(data, "pd.typec2Watts")),
-        ("USB 1", _pick(data, "pd.usb1Watts")),
-        ("USB 2", _pick(data, "pd.usb2Watts")),
+        ("USB-C", _pick(data, "pd.typec1Watts")),
+        ("USB-C", _pick(data, "pd.typec2Watts")),
+        ("USB-A", _pick(data, "pd.usb1Watts")),
+        ("USB-A", _pick(data, "pd.usb2Watts")),
         ("Auto (12V)", _pick(data, "pd.carWatts")),
     ]
     active_ports = [{"name": name, "watts": w} for name, w in ports if w]
