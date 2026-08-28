@@ -1189,7 +1189,7 @@ def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detai
     return line
 
 
-def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, reason: str = "") -> tuple:
+def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> tuple:
     """Para power bank / ventilador (varias unidades, cada una con
     su propio watiaje): un punto 🟢/🔴 por unidad, según si esa unidad
     puntual entra en el excedente disponible ahora mismo (orden acumulativo:
@@ -1201,14 +1201,16 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
     en vez de un conteo aparte. Si TODAS las unidades están marcadas, se
     resume con un solo ✅ al final en vez de repetir el ✓ en cada una.
 
-    `reason` solo se muestra si hace falta actuar: alguna unidad marcada
-    ON de verdad está en rojo (habría que apagarla). Si todo lo que está
-    en rojo ya está OFF, no hay nada que decidir y no se muestra.
+    El detalle de watts (mismo estilo que laptop/TV: "necesitas X W,
+    tienes Y W") solo se muestra si hace falta actuar: alguna unidad
+    marcada ON de verdad está en rojo. X es la suma de TODAS las unidades
+    marcadas (lo que pediste en total), no solo las que no entraron.
 
     `available_w` ya viene descontado de lo que se llevaron las cargas de
     mayor prioridad (ver _allocate_budget) — no es el excedente total del
     sistema, es lo que queda para ESTA carga en particular."""
-    remaining = max(0, available_w) if available_w is not None else 0
+    original_available = max(0, available_w) if available_w is not None else 0
+    remaining = original_available
     dots = []
     for key in device_keys:
         watts = DEVICE_INFO[key]["watts"]
@@ -1227,8 +1229,9 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
         )
     line = f"{emoji} {label}: {dots_str}"
     actionable = any(DEVICE_STATE.get(key) and dot == "🔴" for key, dot in zip(device_keys, dots))
-    if reason and actionable:
-        line += f" — {reason}"
+    if actionable:
+        needed = sum(DEVICE_INFO[key]["watts"] for key in device_keys if DEVICE_STATE.get(key))
+        line += f" — necesitas {needed} W, tienes {round(original_available)} W"
     return line, remaining
 
 
@@ -1305,12 +1308,8 @@ def build_load_advisor_message(m: dict = None) -> str:
             laptop_detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
         laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
 
-        vent_line, available = _multi_unit_line(
-            "🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available, "sin excedente para esto",
-        )
-        pb_line, available = _multi_unit_line(
-            "🔋", "Power bank", POWERBANK_DEVICE_KEYS, available, "sin excedente para esto",
-        )
+        vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
+        pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
 
         tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
         if tv_ok or not DEVICE_STATE.get("tv"):
