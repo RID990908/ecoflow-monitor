@@ -1557,6 +1557,12 @@ DASHBOARD_HTML = """<!doctype html>
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
   .device-btn.on .state { color: #4ade80; }
   .device-btn.off .state { color: #6b7684; }
+  .cargas { width: 100%; max-width: 380px; margin-top: 14px; }
+  .cargas .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
+  .cargas-box {
+    font-size: 14px; line-height: 1.7; color: #cbd5e1; white-space: pre-line;
+    background: #141b22; border: 1px solid #232b33; border-radius: 10px; padding: 12px 14px;
+  }
   .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
   .live-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
@@ -1617,6 +1623,11 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="ports" id="ports-wrap" style="display:none">
     <div class="title">Puertos activos</div>
     <div id="ports"></div>
+  </div>
+
+  <div class="cargas" id="cargas-wrap" style="display:none">
+    <div class="title">Gestión de cargas</div>
+    <div class="cargas-box" id="cargas-box"></div>
   </div>
 
   <div class="devices">
@@ -1801,11 +1812,33 @@ DASHBOARD_HTML = """<!doctype html>
       });
     }
 
+    // Mismo texto que manda el bot por Telegram (build_load_advisor_message),
+    // solo se reformatea el *negrita* de Telegram a <strong> para HTML.
+    function escapeHtml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    async function loadCargas() {
+      try {
+        const res = await fetch('/api/cargas');
+        const d = await res.json();
+        const wrap = document.getElementById('cargas-wrap');
+        if (d.message) {
+          wrap.style.display = 'block';
+          document.getElementById('cargas-box').innerHTML =
+            escapeHtml(d.message).replace(/\\*(.+?)\\*/g, '<strong>$1</strong>');
+        } else {
+          wrap.style.display = 'none';
+        }
+      } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
+    }
+
     refresh();
     loadDevices();
+    loadCargas();
     setInterval(refresh, 1000);
     setInterval(tickClock, 1000);
     setInterval(loadDevices, 10000);
+    setInterval(loadCargas, 30000);
   </script>
 </body>
 </html>
@@ -1840,6 +1873,14 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/devices":
             payload = json.dumps(get_device_state_payload()).encode("utf-8")
             self._send(200, payload, "application/json")
+        elif self.path == "/api/cargas":
+            try:
+                message = build_load_advisor_message() if ECOFLOW_READY else ""
+                payload = json.dumps({"message": message}).encode("utf-8")
+                self._send(200, payload, "application/json")
+            except Exception as exc:
+                payload = json.dumps({"message": "", "error": str(exc)}).encode("utf-8")
+                self._send(500, payload, "application/json")
         else:
             self._send(404, b"not found", "text/plain")
 
