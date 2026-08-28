@@ -776,10 +776,9 @@ HELP_TEXT = (
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
     f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
-    f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) · chequeo de carga AC cada {AC_CHECK_MINUTES:g} min. "
-    "También te aviso al llegar a 100% de carga.\n\n"
-    "🔆 De 6:00 AM a 12:00 AM te mando cada media hora qué encender/apagar (nevera, "
-    "TV, laptop, power bank) según el plan.\n\n"
+    f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) — incluye el detalle de batería/puertos y, en el mismo mensaje, "
+    "qué encender/apagar según el plan. Chequeo de carga AC cada "
+    f"{AC_CHECK_MINUTES:g} min, también te aviso al llegar a 100% de carga.\n\n"
     "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
     "(65-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
 )
@@ -931,6 +930,18 @@ def _in_quiet_hours(now=None) -> bool:
     return _QUIET_START_MIN <= minute_of_day < _QUIET_END_MIN
 
 
+def build_combined_message() -> str:
+    """Junta el informe detallado y la gestión de cargas en un solo mensaje
+    de Telegram — antes eran dos timers separados que mandaban dos mensajes
+    casi al mismo minuto, con contenido parecido (batería, entrada/salida)
+    aunque no idéntico. Un solo envío, más fácil de leer de una."""
+    report = build_report()
+    cargas = build_load_advisor_message()
+    if not cargas:
+        return report
+    return report + "\n\n➖➖➖➖➖➖➖➖➖➖\n\n" + cargas
+
+
 def report_timer() -> None:
     while True:
         time.sleep(_seconds_until_next_slot())
@@ -941,8 +952,8 @@ def report_timer() -> None:
             log.info("Informe automático omitido (horario silencioso)")
             continue
         try:
-            send_telegram(build_report())
-            log.info("Informe periódico enviado")
+            send_telegram(build_combined_message())
+            log.info("Informe periódico (con gestión de cargas) enviado")
         except Exception:
             log.exception("Fallo enviando el informe periódico")
 
@@ -1285,22 +1296,6 @@ def _device_mismatch_note(pv_w, system_net_w):
     return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado y falta /off"
 
 
-def load_advisor_timer() -> None:
-    while True:
-        time.sleep(_seconds_until_next_slot())
-        if not ECOFLOW_READY:
-            continue
-        now = datetime.now(TZ)
-        minute_of_day = now.hour * 60 + now.minute
-        if not (LOAD_ADVISOR_START_MIN <= minute_of_day < LOAD_ADVISOR_END_MIN):
-            continue
-        try:
-            msg = build_load_advisor_message()
-            if msg:
-                send_telegram(msg)
-                log.info("Mensaje de gestión de cargas enviado")
-        except Exception:
-            log.exception("Fallo enviando el mensaje de gestión de cargas")
 
 
 # --- Alerta dinámica de proyección: a diferencia del mensaje de /cargas (que
@@ -1924,7 +1919,6 @@ def main() -> None:
 
     threading.Thread(target=poll_commands, daemon=True).start()
     threading.Thread(target=report_timer, daemon=True).start()
-    threading.Thread(target=load_advisor_timer, daemon=True).start()
     threading.Thread(target=battery_projection_timer, daemon=True).start()
     threading.Thread(target=ac_check_timer, daemon=True).start()
     threading.Thread(target=watchdog_timer, daemon=True).start()
