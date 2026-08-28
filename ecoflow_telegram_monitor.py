@@ -1126,17 +1126,8 @@ LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
 BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > nevera > resto
 TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
-NEVERA_WATTS = DEVICE_INFO["nevera"]["watts"]
 POWERBANK_START_MIN = 10 * 60
 POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
-
-# Watts reales de las cargas "resto" (manejables/despreciables), para poder
-# ordenar qué apagar primero por magnitud en vez de solo decir "apagar todo"
-# — cortando la más grande primero se cierra el déficit con menos pasos.
-# Reusan DEVICE_INFO para no tener el mismo watiaje duplicado en dos lugares.
-LAPTOP_WATTS = DEVICE_INFO["laptop"]["watts"]
-TV_WATTS = DEVICE_INFO["tv"]["watts"]
-POWERBANK_WATTS = DEVICE_INFO["powerbank1"]["watts"]  # ventana de carga del plan asume 1 a la vez
 
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM",
@@ -1222,30 +1213,6 @@ def _laptop_line(block: dict) -> str:
     return block["laptop_text"]
 
 
-def _priority_cut_order(block: dict, now) -> str:
-    """Para la emergencia: orden de qué apagar primero si no se puede hacer
-    todo a la vez, usando los watts reales de cada carga. Prioridad: resto
-    (laptop/TV/power bank/luces, ordenados de mayor a menor watt — la más
-    grande cierra el déficit más rápido) primero, la nevera al final (es la
-    única carga protegida que queda, el último recurso real)."""
-    order = []
-    if block["laptop"] != "off":
-        order.append(("Laptop", LAPTOP_WATTS))
-    if block["tv"] != "off":
-        order.append(("TV", TV_WATTS))
-    minute_of_day = now.hour * 60 + now.minute
-    if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
-        order.append(("Power bank", POWERBANK_WATTS))
-    luces_on_w = sum(DEVICE_INFO[k]["watts"] for k in DEVICE_STATE if k.startswith("luces") and DEVICE_STATE[k])
-    if luces_on_w:
-        order.append(("Luces", luces_on_w))
-    order.sort(key=lambda c: -c[1])
-    if block["nevera"] != "off_midnight":
-        order.append(("Nevera", NEVERA_WATTS))
-    parts = [f"{name} ({w}W)" if w is not None else name for name, w in order]
-    return "🔻 Orden si no podés apagar todo a la vez: " + " → ".join(parts)
-
-
 def build_load_advisor_message() -> str:
     """Cinco líneas fijas (Internet, Nevera, Laptop, TV, Power bank) pero
     cada una ya evalúa el estado real (watts, batería) en vez de ser un texto
@@ -1271,7 +1238,6 @@ def build_load_advisor_message() -> str:
             "💻 Laptop: OFF",
             "📺 TV: OFF",
             "🔋 Power bank: OFF",
-            _priority_cut_order(block, now),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
