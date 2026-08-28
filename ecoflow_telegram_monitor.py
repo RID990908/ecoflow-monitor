@@ -1196,7 +1196,7 @@ def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detai
     return line
 
 
-def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> str:
+def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, reason: str = "") -> str:
     """Para power bank / ventilador (varias unidades, cada una con
     su propio watiaje): un punto 🟢/🔴 por unidad, según si esa unidad
     puntual entra en el excedente disponible ahora mismo (orden acumulativo:
@@ -1216,7 +1216,10 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
         else:
             dots.append("🔴")
     on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
-    return f"{emoji} {label}: {' '.join(dots)} ({on_count}/{len(device_keys)} marcadas)"
+    line = f"{emoji} {label}: {' '.join(dots)} ({on_count}/{len(device_keys)} marcadas)"
+    if reason:
+        line += f" — {reason}"
+    return line
 
 
 def _nevera_status(nevera_mode: str) -> tuple:
@@ -1292,6 +1295,12 @@ def build_load_advisor_message(m: dict = None) -> str:
         tv_ok, tv_detail = _tv_status(block["tv"], m["pv_w"], m["system_net_w"], m["avg_soc"])
         pb_ok, _pb_detail = _powerbank_status(now)
         pb_available_w = m["system_net_w"] if pb_ok else 0
+        if not pb_ok:
+            pb_reason = "fuera de la ventana fija (10 AM–2 PM)"
+        elif pb_available_w is None or pb_available_w <= 0:
+            pb_reason = "sin excedente ahora mismo"
+        else:
+            pb_reason = ""
         if block["laptop"] == "full":
             laptop_line = _status_line("💻", "Laptop", True, ["laptop"])
         elif block["laptop"] == "off":
@@ -1303,8 +1312,11 @@ def build_load_advisor_message(m: dict = None) -> str:
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
             laptop_line,
             _status_line("📺", "TV", tv_ok, ["tv"], tv_detail),
-            _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, pb_available_w),
-            _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, m["system_net_w"]),
+            _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, pb_available_w, pb_reason),
+            _multi_unit_line(
+                "🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, m["system_net_w"],
+                "sin excedente ahora mismo" if (m["system_net_w"] is None or m["system_net_w"] <= 0) else "",
+            ),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
