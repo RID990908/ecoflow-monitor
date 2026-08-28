@@ -115,16 +115,20 @@ def _load_persisted_state() -> dict:
 # panel web) para que el bot sepa qué está realmente encendido en vez de
 # asumirlo solo por el horario del plan. Los watts son los reales confirmados
 # por el usuario durante la sesión, se reusan para el chequeo de anomalía en
-# build_load_advisor_message().
+# build_load_advisor_message(). Las cargas con más de una unidad (ventilador,
+# power bank, luces) se desglosan una por una en vez de un solo interruptor
+# combinado, para poder marcar exactamente cuáles están prendidas.
+MULTI_UNIT_DEVICES = {"ventilador": (2, "Ventilador", "🌀", 20), "powerbank": (2, "Power bank", "🔋", 60), "luces": (3, "Luz", "💡", 20)}
+
 DEVICE_INFO = {
-    "frio": {"label": "Frío", "emoji": "🧊", "watts": 140},
     "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
     "laptop": {"label": "Laptop", "emoji": "💻", "watts": 160},
     "tv": {"label": "TV", "emoji": "📺", "watts": 100},
-    "ventilador": {"label": "Ventiladores (2)", "emoji": "🌀", "watts": 40},
-    "powerbank": {"label": "Power banks (2)", "emoji": "🔋", "watts": 120},
-    "luces": {"label": "Luces (3)", "emoji": "💡", "watts": 60},
 }
+for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
+    for _i in range(1, _count + 1):
+        DEVICE_INFO[f"{_base}{_i}"] = {"label": f"{_label} {_i}", "emoji": _emoji, "watts": _watts}
+
 INTERNET_WATTS = 45  # promedio del rango 30-60 W, siempre ON, no se marca a mano
 
 
@@ -765,7 +769,7 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/on <dispositivo> — marcarlo encendido (frio, nevera, laptop, tv, ventilador, powerbank, luces)\n"
+    "/on <dispositivo> — marcarlo encendido (nevera, laptop, tv, ventilador, powerbank, luces)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/estado — ver qué marcaste encendido/apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
@@ -792,18 +796,37 @@ _DEVICE_ALIASES = {
     "power": "powerbank", "bank": "powerbank", "powerbanks": "powerbank",
     "ventiladores": "ventilador", "fan": "ventilador", "fans": "ventilador",
     "pc": "laptop", "compu": "laptop", "computadora": "laptop",
-    "congelador": "frio", "freezer": "frio",
     "luz": "luces", "light": "luces", "lights": "luces",
 }
 
 
-def _normalize_device(word: str):
-    """Saca acentos y matchea contra DEVICE_INFO (o un alias común). Devuelve
-    None si no reconoce el dispositivo."""
-    word = word.strip().lower()
+def _resolve_device_keys(word: str) -> list:
+    """Saca acentos/espacios y matchea contra DEVICE_INFO (o un alias común).
+    Para las cargas con varias unidades (ventilador, powerbank, luces):
+    con número al final devuelve esa unidad puntual (ej. 'ventilador2' o
+    'fan 2' → ['ventilador2']); sin número devuelve TODAS las unidades de esa
+    categoría (ej. 'luces' → ['luces1','luces2','luces3']). Lista vacía si no
+    reconoce nada."""
+    word = word.strip().lower().replace(" ", "")
     word = "".join(c for c in unicodedata.normalize("NFD", word) if unicodedata.category(c) != "Mn")
-    word = _DEVICE_ALIASES.get(word, word)
-    return word if word in DEVICE_INFO else None
+    match = None
+    for i in range(len(word), 0, -1):
+        if word[:i].isalpha():
+            match = (word[:i], word[i:])
+            break
+    if match is None:
+        return []
+    base, num = match
+    base = _DEVICE_ALIASES.get(base, base)
+    if base in MULTI_UNIT_DEVICES:
+        count = MULTI_UNIT_DEVICES[base][0]
+        if num:
+            key = f"{base}{num}"
+            return [key] if key in DEVICE_INFO else []
+        return [f"{base}{i}" for i in range(1, count + 1)]
+    if num:
+        return []  # "tv2" no existe, es de una sola unidad
+    return [base] if base in DEVICE_INFO else []
 
 
 def _device_state_lines() -> list:
@@ -820,23 +843,24 @@ def handle_command(text: str, chat_id: str) -> None:
         msg = build_load_advisor_message()
         if not msg:
             msg = (
-                "🌙 Fuera de franja (6:00 AM–12:00 AM): internet ON, resto OFF, frío "
-                "apagado desde las 12 AM hasta el amanecer."
+                "🌙 Fuera de franja (6:00 AM–12:00 AM): internet ON, resto OFF, nevera "
+                "apagada desde las 12 AM hasta el amanecer."
             )
         send_telegram(msg, chat_id=chat_id)
     elif cmd in ("/on", "/off"):
         if len(parts) < 2:
             send_telegram(f"Uso: {cmd} <dispositivo> — {', '.join(DEVICE_INFO)}", chat_id=chat_id)
         else:
-            device = _normalize_device(parts[1])
-            if device is None:
+            keys = _resolve_device_keys(parts[1])
+            if not keys:
                 send_telegram(f"No reconozco '{parts[1]}'. Dispositivos: {', '.join(DEVICE_INFO)}", chat_id=chat_id)
             else:
-                DEVICE_STATE[device] = cmd == "/on"
+                estado = "ON" if cmd == "/on" else "OFF"
+                for key in keys:
+                    DEVICE_STATE[key] = cmd == "/on"
                 _save_persisted_state()
-                info = DEVICE_INFO[device]
-                estado = "ON" if DEVICE_STATE[device] else "OFF"
-                send_telegram(f"{info['emoji']} {info['label']}: marcado {estado}", chat_id=chat_id)
+                lines = [f"{DEVICE_INFO[k]['emoji']} {DEVICE_INFO[k]['label']}: marcado {estado}" for k in keys]
+                send_telegram("\n".join(lines), chat_id=chat_id)
     elif cmd == "/estado":
         send_telegram("📋 *Lo que marcaste encendido/apagado:*\n\n" + "\n".join(_device_state_lines()), chat_id=chat_id)
     elif cmd == "/alerta":
@@ -1091,18 +1115,18 @@ def watchdog_timer() -> None:
 # --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
 # 19:30, que dice qué debería estar encendido/apagado según el bloque horario
 # del plan (que cubre las 24 h: la noche solo se consulta por /cargas, el
-# timer automático no manda mensajes fuera de esa ventana). El frío es
-# prioritario de día y a la primera parte de la noche, pero se apaga
-# programado a las 12 AM (acumuló frío todo el día, aguanta hasta el
-# amanecer) — antes de eso solo se apaga en emergencia de batería. La nevera
-# es la carga gestionable, solo ON de 9 AM a 4:30 PM. La TV tiene dos
-# ventanas con criterios distintos: mediodía (según exceso de consumo, igual
-# que la nevera) y 6:30-7:30 PM (según si la batería llegó sobrada al 75%).
+# timer automático no manda mensajes fuera de esa ventana). El frío
+# (congelador) se eliminó del sistema — la NEVERA tomó su rol: es la carga
+# protegida, se mantiene ON siempre salvo emergencia de batería, y se apaga
+# programado a las 12 AM (aguanta cerrada hasta el amanecer). Ya no hay
+# ninguna carga que se apague por exceso de consumo salvo la TV — es la
+# única "gestionable" que queda, con dos ventanas de criterio distinto:
+# mediodía (exceso real de consumo) y 6:30-7:30 PM (batería sobrada al 75%).
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
-BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > frío/nevera > resto
+BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > nevera > resto
 TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
-NEVERA_WATTS = DEVICE_INFO["nevera"]["watts"]  # para estimar si apagar la nevera alcanza para cubrir el exceso
+NEVERA_WATTS = DEVICE_INFO["nevera"]["watts"]
 POWERBANK_START_MIN = 10 * 60
 POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
 
@@ -1112,36 +1136,36 @@ POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca 
 # Reusan DEVICE_INFO para no tener el mismo watiaje duplicado en dos lugares.
 LAPTOP_WATTS = DEVICE_INFO["laptop"]["watts"]
 TV_WATTS = DEVICE_INFO["tv"]["watts"]
-POWERBANK_WATTS = DEVICE_INFO["powerbank"]["watts"]
+POWERBANK_WATTS = DEVICE_INFO["powerbank1"]["watts"]  # ventana de carga del plan asume 1 a la vez
 
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM",
-     "laptop": "off", "laptop_text": None, "frio": "on",
-     "nevera": "off", "tv": "off", "battery_goal": "Sin sol aún, ~-2%"},
+     "laptop": "off", "laptop_text": None, "nevera": "on",
+     "tv": "off", "battery_goal": "Sin sol aún, ~-2%"},
     {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM",
-     "laptop": "min", "laptop_text": "💻 Laptop: solo si es imprescindible", "frio": "on",
-     "nevera": "off", "tv": "off", "battery_goal": "Sube lento con el primer sol"},
+     "laptop": "min", "laptop_text": "💻 Laptop: solo si es imprescindible", "nevera": "on",
+     "tv": "off", "battery_goal": "Sube lento con el primer sol"},
     {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM",
-     "laptop": "full", "laptop_text": None, "frio": "on",
-     "nevera": "conditional", "tv": "off", "battery_goal": "~55-60% al mediodía"},
+     "laptop": "full", "laptop_text": None, "nevera": "on",
+     "tv": "off", "battery_goal": "~55-60% al mediodía"},
     {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM",
-     "laptop": "full", "laptop_text": None, "frio": "on",
-     "nevera": "conditional", "tv": "peak", "battery_goal": "65–75% a las 3 PM"},
+     "laptop": "full", "laptop_text": None, "nevera": "on",
+     "tv": "peak", "battery_goal": "65–75% a las 3 PM"},
     {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
-     "laptop": "min", "laptop_text": "💻 Laptop: solo si es necesario", "frio": "on",
-     "nevera": "conditional", "tv": "off", "battery_goal": "Mantener con el sol restante"},
+     "laptop": "min", "laptop_text": "💻 Laptop: solo si es necesario", "nevera": "on",
+     "tv": "off", "battery_goal": "Mantener con el sol restante"},
     {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
-     "laptop": "off", "laptop_text": None, "frio": "on",
-     "nevera": "off", "tv": "off", "battery_goal": "70%+"},
+     "laptop": "off", "laptop_text": None, "nevera": "on",
+     "tv": "off", "battery_goal": "70%+"},
     {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM",
-     "laptop": "off", "laptop_text": None, "frio": "on",
-     "nevera": "off", "tv": "evening", "battery_goal": "Cerrar el día con 68-75%"},
+     "laptop": "off", "laptop_text": None, "nevera": "on",
+     "tv": "evening", "battery_goal": "Cerrar el día con 68-75%"},
     {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM",
-     "laptop": "off", "laptop_text": None, "frio": "on",
-     "nevera": "off", "tv": "off", "battery_goal": "Bajando controlado"},
+     "laptop": "off", "laptop_text": None, "nevera": "on",
+     "tv": "off", "battery_goal": "Bajando controlado"},
     {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM",
-     "laptop": "off", "laptop_text": None, "frio": "off_midnight",
-     "nevera": "off", "tv": "off", "battery_goal": "Amanecer con 25-40%"},
+     "laptop": "off", "laptop_text": None, "nevera": "off_midnight",
+     "tv": "off", "battery_goal": "Amanecer con 25-40%"},
 ]
 
 
@@ -1154,47 +1178,27 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _frio_line(frio_mode: str) -> str:
-    """Regla 2 y 3: el frío es prioritario de día y a la primera parte de la
-    noche; a las 12 AM se apaga programado porque ya acumuló frío todo el día
-    y aguanta hasta el amanecer. El caso de emergencia de batería se maneja
-    aparte en build_load_advisor_message (ahí apaga todo, no solo el frío)."""
-    if frio_mode == "off_midnight":
-        return "🧊 Frío: OFF (apagado a las 12 AM, acumuló frío todo el día)"
-    return "🧊 Frío: ON"
+def _nevera_line(nevera_mode: str) -> str:
+    """La nevera es ahora la carga protegida (tomó el rol que tenía el
+    frío): se mantiene ON siempre salvo emergencia de batería, y se apaga
+    programado a las 12 AM (aguanta cerrada hasta el amanecer). El caso de
+    emergencia se maneja aparte en build_load_advisor_message (ahí apaga
+    todo, no solo la nevera)."""
+    if nevera_mode == "off_midnight":
+        return "🥶 Nevera: OFF (apagada a las 12 AM, aguanta cerrada hasta el amanecer)"
+    return "🥶 Nevera: ON"
 
 
-def _nevera_line(nevera_mode: str, pv_w, system_net_w) -> tuple:
-    """Regla 1 y 4: nevera solo ON de 9 AM a 4:30 PM; ahí se apaga primero
-    (antes que la TV) si la salida real supera la entrada. Usa system_net_w
-    (Delta 2 + batería extra combinadas) en vez del wattsOutSum crudo de la
-    Delta 2, porque parte de esa salida puede estar yendo a cargar la
-    batería extra — eso no es un déficit real, hay que descontarlo. Devuelve
-    (línea, exceso de watts o 0) — el exceso lo reutiliza la TV del mediodía."""
-    if nevera_mode == "off":
-        return "🥶 Nevera: OFF", None
-    pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
-    if pv_w is not None and system_net_w is not None:
-        out_str = f"{round(pv_w - system_net_w)} W"
-    else:
-        out_str = "N/D"
-    excess = -system_net_w if (system_net_w is not None and system_net_w < -NOISE_FLOOR_W) else 0
-    if excess <= 0:
-        return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", excess
-    if excess <= NEVERA_WATTS:
-        return f"🥶 Nevera: OFF 30-40 min (salida {out_str} > entrada {pv_str})", excess
-    return f"🥶 Nevera: OFF (salida {out_str} > entrada {pv_str})", excess
-
-
-def _tv_line(tv_mode: str, excess, avg_soc) -> str:
-    """Regla 1 (mediodía, sigue a la nevera) y regla 6 (noche, según si se
-    llegó sobrado al 75% de batería — dos criterios distintos, no relacionados)."""
+def _tv_line(tv_mode: str, pv_w, system_net_w, avg_soc) -> str:
+    """Única carga "gestionable" que queda, con dos ventanas de criterio
+    distinto: mediodía (exceso real de consumo, ya no depende de la nevera
+    porque está protegida) y noche (batería sobrada al 75%)."""
     if tv_mode == "peak":
-        if excess is None or excess <= 0:
+        if system_net_w is None or system_net_w >= -NOISE_FLOOR_W:
             return "📺 TV: OK, ventana ideal (1 h)"
-        if excess <= NEVERA_WATTS:
-            return "📺 TV: OK, alcanza con la nevera"
-        return "📺 TV: OFF también"
+        pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
+        out_str = f"{round(pv_w - system_net_w)} W" if pv_w is not None else "N/D"
+        return f"📺 TV: OFF (salida {out_str} > entrada {pv_str})"
     if tv_mode == "evening":
         if avg_soc is not None and avg_soc >= TV_EVENING_THRESHOLD:
             return "📺 TV: OK (1 h), llegaste sobrado al anochecer"
@@ -1221,9 +1225,9 @@ def _laptop_line(block: dict) -> str:
 def _priority_cut_order(block: dict, now) -> str:
     """Para la emergencia: orden de qué apagar primero si no se puede hacer
     todo a la vez, usando los watts reales de cada carga. Prioridad: resto
-    (laptop/TV/power bank, ordenados de mayor a menor watt — la más grande
-    cierra el déficit más rápido) primero, nevera después, frío al final
-    (es el más protegido, el último recurso real)."""
+    (laptop/TV/power bank/luces, ordenados de mayor a menor watt — la más
+    grande cierra el déficit más rápido) primero, la nevera al final (es la
+    única carga protegida que queda, el último recurso real)."""
     order = []
     if block["laptop"] != "off":
         order.append(("Laptop", LAPTOP_WATTS))
@@ -1232,38 +1236,37 @@ def _priority_cut_order(block: dict, now) -> str:
     minute_of_day = now.hour * 60 + now.minute
     if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
         order.append(("Power bank", POWERBANK_WATTS))
-    if DEVICE_STATE.get("luces"):
-        order.append(("Luces", DEVICE_INFO["luces"]["watts"]))
+    luces_on_w = sum(DEVICE_INFO[k]["watts"] for k in DEVICE_STATE if k.startswith("luces") and DEVICE_STATE[k])
+    if luces_on_w:
+        order.append(("Luces", luces_on_w))
     order.sort(key=lambda c: -c[1])
-    if block["nevera"] != "off":
+    if block["nevera"] != "off_midnight":
         order.append(("Nevera", NEVERA_WATTS))
-    order.append(("Frío", None))
     parts = [f"{name} ({w}W)" if w is not None else name for name, w in order]
     return "🔻 Orden si no podés apagar todo a la vez: " + " → ".join(parts)
 
 
 def build_load_advisor_message() -> str:
-    """Seis líneas fijas (Internet, Frío, Laptop, Nevera, TV, Power bank) pero
+    """Cinco líneas fijas (Internet, Nevera, Laptop, TV, Power bank) pero
     cada una ya evalúa el estado real (watts, batería) en vez de ser un texto
     fijo — no se agrega el ventilador porque nunca hay nada que decidir ahí.
-    Prioridad: Internet > Frío/Nevera > resto (laptop, TV, power bank). Por
+    Prioridad: Internet > Nevera > resto (laptop, TV, power bank). Por
     debajo de BATTERY_EMERGENCY_THRESHOLD se apaga TODO menos internet — no
-    alcanza con bajar solo el frío si el resto sigue mostrando 'ON' como si
-    nada, porque son de menor prioridad y deben ceder primero/junto con él."""
+    alcanza con bajar solo la nevera si el resto sigue mostrando 'ON' como si
+    nada, porque son de menor prioridad y deben ceder primero/junto con ella."""
     block = _current_load_block()
     if block is None:
         return ""
     now = datetime.now(TZ)
     m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    emergency = block["frio"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
+    emergency = block["nevera"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
 
     if emergency:
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
             "✅ Internet: ON",
-            "🧊 Frío: OFF",
             "🥶 Nevera: OFF",
             "💻 Laptop: OFF",
             "📺 TV: OFF",
@@ -1273,14 +1276,12 @@ def build_load_advisor_message() -> str:
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
     else:
-        nevera_line, excess = _nevera_line(block["nevera"], m["pv_w"], m["system_net_w"])
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             "✅ Internet: ON",
-            _frio_line(block["frio"]),
+            _nevera_line(block["nevera"]),
             _laptop_line(block),
-            nevera_line,
-            _tv_line(block["tv"], excess, m["avg_soc"]),
+            _tv_line(block["tv"], m["pv_w"], m["system_net_w"], m["avg_soc"]),
             _powerbank_line(now),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
@@ -1881,8 +1882,10 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length) or b"{}")
-                device = _normalize_device(str(body.get("device", "")))
-                if device is None:
+                device = str(body.get("device", ""))
+                # el panel web manda la clave exacta (dev.key de /api/devices),
+                # no hace falta resolver alias como en los comandos de Telegram
+                if device not in DEVICE_INFO:
                     self._send(400, b'{"error":"dispositivo desconocido"}', "application/json")
                     return
                 DEVICE_STATE[device] = bool(body.get("on"))
