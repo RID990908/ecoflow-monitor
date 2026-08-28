@@ -607,7 +607,18 @@ def _gather_metrics(passive: bool = False) -> dict:
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
     source_verb, source_emoji = _charge_source(pv_w, ac_present, ac_w, system_net_w)
 
-    avg_soc = round((soc_delta2 + soc_extra) / 2, 1) if soc_delta2 is not None and soc_extra is not None else None
+    # Si falla la lectura de una de las dos (hueco momentáneo de datos por
+    # MQTT), promediar solo con la que sí llegó en vez de perder avg_soc del
+    # todo — importa para que el chequeo de emergencia de batería no se quede
+    # ciego justo cuando más hace falta.
+    if soc_delta2 is not None and soc_extra is not None:
+        avg_soc = round((soc_delta2 + soc_extra) / 2, 1)
+    elif soc_delta2 is not None:
+        avg_soc = soc_delta2
+    elif soc_extra is not None:
+        avg_soc = soc_extra
+    else:
+        avg_soc = None
 
     remain = None
     is_stable = abs(total_in_w - out_w) <= NOISE_FLOOR_W
