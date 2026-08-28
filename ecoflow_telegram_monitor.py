@@ -69,7 +69,7 @@ AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "1"))
 AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
 
 # Railway corre en UTC; esto es solo para mostrar horas locales (hora estimada
-# de autonomía, horario del resumen diario). zoneinfo maneja el horario de
+# de autonomía, bloques del plan de cargas). zoneinfo maneja el horario de
 # verano de Cuba automáticamente.
 TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Havana"))
 # Horario silencioso: de noche no tiene sentido recibir el informe automático
@@ -79,9 +79,6 @@ QUIET_START_HOUR = int(os.environ.get("QUIET_START_HOUR", "23"))
 QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
 QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "7"))
 QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
-
-# El resumen diario sale 10 min antes de que arranque el horario silencioso.
-_daily_summary_total_min = (QUIET_START_HOUR * 60 + QUIET_START_MINUTE - 10) % (24 * 60)
 
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
@@ -137,13 +134,6 @@ WAS_BELOW_LOW_THRESHOLD = _persisted.get("was_below_low_threshold", False)
 WAS_FULL = _persisted.get("was_full", False)
 LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 _DATA_STALE_ALERTED = False
-
-# Acumuladores del resumen diario (en memoria; si hay un redeploy en medio del
-# día se pierde lo acumulado hasta ese momento, es un dato informativo, no crítico).
-_daily_solar_wh = 0.0
-_daily_consumed_wh = 0.0
-_daily_lock = threading.Lock()
-_daily_summary_sent_date = None
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
@@ -934,7 +924,6 @@ def ac_check_timer() -> None:
     """Chequea, en un mismo ciclo: si llegó la corriente, si la carga bajó del
     umbral configurado con /alerta, y si terminó de cargar (100%)."""
     global WAS_CHARGING_AC, WAS_BELOW_LOW_THRESHOLD, WAS_FULL, LAST_AC_TIMESTAMP
-    global _daily_solar_wh, _daily_consumed_wh
     while True:
         time.sleep(AC_CHECK_MINUTES * 60)
         if not ECOFLOW_READY:
@@ -942,10 +931,6 @@ def ac_check_timer() -> None:
         try:
             data = get_device_quota(SN_DELTA2)
             pv_w = get_pv_watts(data)
-            out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
-            with _daily_lock:
-                _daily_solar_wh += (pv_w or 0) * (AC_CHECK_MINUTES / 60)
-                _daily_consumed_wh += (out_w or 0) * (AC_CHECK_MINUTES / 60)
             ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
             # Presencia real de AC (por voltaje), no por wattage neto — así no
             # se dispara "se fue la luz" cuando la batería está llena y el AC
@@ -1027,38 +1012,6 @@ def watchdog_timer() -> None:
             log.exception("Error en el watchdog de datos")
 
 
-def daily_summary_timer() -> None:
-    """Una vez por día, 10 min antes de que arranque el horario silencioso,
-    manda cuánto entró de solar y cuánto se consumió en total ese día."""
-    global _daily_solar_wh, _daily_consumed_wh, _daily_summary_sent_date
-    while True:
-        time.sleep(300)
-        if not ECOFLOW_READY:
-            continue
-        now = datetime.now(TZ)
-        today = now.date()
-        now_total_min = now.hour * 60 + now.minute
-        # ventana de 5 min (coincide con el intervalo de chequeo) para no
-        # depender de pegarle justo al minuto exacto.
-        in_window = 0 <= (now_total_min - _daily_summary_total_min) % (24 * 60) < 5
-        if not in_window or _daily_summary_sent_date == today:
-            continue
-        try:
-            with _daily_lock:
-                solar_wh, consumed_wh = _daily_solar_wh, _daily_consumed_wh
-                _daily_solar_wh = 0.0
-                _daily_consumed_wh = 0.0
-            send_telegram(
-                "🌙 *Resumen del día*\n\n"
-                f"☀️ Entró de solar: {solar_wh / 1000:.2f} kWh\n"
-                f"📤 Se consumió: {consumed_wh / 1000:.2f} kWh"
-            )
-            _daily_summary_sent_date = today
-            log.info("Resumen diario enviado (%.0f Wh solar, %.0f Wh consumido)", solar_wh, consumed_wh)
-        except Exception:
-            log.exception("Error mandando el resumen diario")
-
-
 # --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
 # 19:30, que dice qué debería estar encendido/apagado según el bloque horario
 # del plan (que cubre las 24 h: la noche solo se consulta por /cargas, el
@@ -1128,16 +1081,22 @@ def _frio_line(frio_mode: str, avg_soc) -> str:
     return "🧊 Frío: ON"
 
 
-def _nevera_line(nevera_mode: str, pv_w, out_w) -> tuple:
+def _nevera_line(nevera_mode: str, pv_w, system_net_w) -> tuple:
     """Regla 1 y 4: nevera solo ON de 9 AM a 4:30 PM; ahí se apaga primero
-    (antes que la TV) si la salida supera la entrada. Devuelve (línea, exceso
-    de watts o None) — el exceso lo reutiliza la TV del mediodía."""
+    (antes que la TV) si la salida real supera la entrada. Usa system_net_w
+    (Delta 2 + batería extra combinadas) en vez del wattsOutSum crudo de la
+    Delta 2, porque parte de esa salida puede estar yendo a cargar la
+    batería extra — eso no es un déficit real, hay que descontarlo. Devuelve
+    (línea, exceso de watts o 0) — el exceso lo reutiliza la TV del mediodía."""
     if nevera_mode == "off":
         return "🥶 Nevera: OFF", None
     pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
-    out_str = f"{out_w} W" if out_w is not None else "N/D"
-    excess = (out_w - pv_w) if (out_w is not None and pv_w is not None) else None
-    if excess is None or excess <= 0:
+    if pv_w is not None and system_net_w is not None:
+        out_str = f"{round(pv_w - system_net_w)} W"
+    else:
+        out_str = "N/D"
+    excess = -system_net_w if (system_net_w is not None and system_net_w < -NOISE_FLOOR_W) else 0
+    if excess <= 0:
         return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", excess
     if excess <= NEVERA_WATTS:
         return f"🥶 Nevera: APAGAR 30-40 min (salida {out_str} > entrada {pv_str})", excess
@@ -1186,7 +1145,7 @@ def build_load_advisor_message() -> str:
     now = datetime.now(TZ)
     m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    nevera_line, excess = _nevera_line(block["nevera"], m["pv_w"], m["out_w"])
+    nevera_line, excess = _nevera_line(block["nevera"], m["pv_w"], m["system_net_w"])
     lines = [
         f"🔆 *Gestión de cargas* · {block['label']}",
         "✅ Internet: ON",
@@ -1198,6 +1157,12 @@ def build_load_advisor_message() -> str:
         "",
         f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
     ]
+    proj = _project_to_checkpoint(now, m["avg_soc"], m["system_net_w"])
+    if proj:
+        proj_label, proj_floor, proj_pct = proj
+        ok = proj_pct >= proj_floor
+        emoji = "✅" if ok else "⚠️"
+        lines.append(f"{emoji} Proyección: {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
     return "\n".join(lines)
 
 
@@ -1243,6 +1208,23 @@ def _next_checkpoint(now):
     return None
 
 
+def _project_to_checkpoint(now, avg_soc, system_net_w):
+    """Proyecta el %SOC combinado (Delta 2 + batería extra) en el próximo
+    checkpoint del plan al ritmo de descarga actual. Devuelve
+    (label, floor, projected) o None si falta algún dato o no hay checkpoint
+    por delante. Lo usan tanto la alerta dinámica como la línea de proyección
+    del mensaje de /cargas."""
+    cp = _next_checkpoint(now)
+    if cp is None or avg_soc is None or system_net_w is None:
+        return None
+    cp_min, floor, label = cp
+    minute_of_day = now.hour * 60 + now.minute
+    hours_left = (cp_min - minute_of_day) / 60
+    capacity_wh = BATTERY_CAPACITY_WH * 2
+    projected = avg_soc + (system_net_w * hours_left) / capacity_wh * 100
+    return label, floor, max(0.0, min(100.0, projected))
+
+
 def _check_battery_projection(now=None) -> None:
     """Un chequeo: proyecta el %SOC en el próximo checkpoint con el ritmo de
     descarga actual y avisa (una vez por checkpoint/día, con rearme si se
@@ -1251,13 +1233,12 @@ def _check_battery_projection(now=None) -> None:
     minute_of_day = now.hour * 60 + now.minute
     if not (LOAD_ADVISOR_START_MIN <= minute_of_day < LOAD_ADVISOR_END_MIN):
         return
-    cp = _next_checkpoint(now)
-    if cp is None:
-        return
-    cp_min, floor, label = cp
     m = _gather_metrics()
-    if m["avg_soc"] is None or m["system_net_w"] is None:
+    proj = _project_to_checkpoint(now, m["avg_soc"], m["system_net_w"])
+    if proj is None:
         return
+    label, floor, projected = proj
+    cp_min, _, _ = _next_checkpoint(now)
     today = now.date()
     if m["system_net_w"] >= -NOISE_FLOOR_W:
         # no está descargando neto ahora mismo: sin riesgo, se puede rearmar
@@ -1265,9 +1246,6 @@ def _check_battery_projection(now=None) -> None:
         if _projection_alerted_for.get(cp_min) == today:
             del _projection_alerted_for[cp_min]
         return
-    hours_left = (cp_min - minute_of_day) / 60
-    capacity_wh = BATTERY_CAPACITY_WH * 2
-    projected = m["avg_soc"] + (m["system_net_w"] * hours_left) / capacity_wh * 100
     if projected < floor - PROJECTION_ALERT_MARGIN:
         if _projection_alerted_for.get(cp_min) != today:
             send_telegram(
@@ -1693,7 +1671,6 @@ def main() -> None:
     threading.Thread(target=battery_projection_timer, daemon=True).start()
     threading.Thread(target=ac_check_timer, daemon=True).start()
     threading.Thread(target=watchdog_timer, daemon=True).start()
-    threading.Thread(target=daily_summary_timer, daemon=True).start()
     threading.Thread(target=quiet_hours_timer, daemon=True).start()
     threading.Thread(target=weekly_cleanup_timer, daemon=True).start()
     threading.Thread(target=run_dashboard_server, daemon=True).start()
