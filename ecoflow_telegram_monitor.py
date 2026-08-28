@@ -1137,38 +1137,31 @@ def watchdog_timer() -> None:
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
 BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > nevera > resto
-TV_EVENING_THRESHOLD = 75  # regla 6: TV de noche solo si se llegó sobrado al anochecer
-POWERBANK_START_MIN = 10 * 60
-POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
 
+# El único horario fijo que queda es el apagado programado de la nevera a
+# medianoche (es la carga protegida, aguanta cerrada hasta el amanecer).
+# Laptop, TV, power bank y ventilador ya NO tienen ventanas horarias: se
+# habilitan o no según el excedente real del sistema (system_net_w) en el
+# momento de la consulta, sin importar la hora que sea.
 _LOAD_SCHEDULE = [
-    {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM",
-     "laptop": "off", "laptop_text": None, "nevera": "on",
-     "tv": "off", "battery_goal": "Sin sol aún, ~-2%"},
-    {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM",
-     "laptop": "min", "laptop_text": "solo si es imprescindible", "nevera": "on",
-     "tv": "off", "battery_goal": "Sube lento con el primer sol"},
-    {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM",
-     "laptop": "full", "laptop_text": None, "nevera": "on",
-     "tv": "off", "battery_goal": "~55-60% al mediodía"},
-    {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM",
-     "laptop": "full", "laptop_text": None, "nevera": "on",
-     "tv": "peak", "battery_goal": "65–75% a las 3 PM"},
-    {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
-     "laptop": "min", "laptop_text": "solo si es necesario", "nevera": "on",
-     "tv": "off", "battery_goal": "Mantener con el sol restante"},
-    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
-     "laptop": "off", "laptop_text": None, "nevera": "on",
-     "tv": "off", "battery_goal": "70%+"},
-    {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM",
-     "laptop": "off", "laptop_text": None, "nevera": "on",
-     "tv": "evening", "battery_goal": "Cerrar el día con 68-75%"},
-    {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM",
-     "laptop": "off", "laptop_text": None, "nevera": "on",
-     "tv": "off", "battery_goal": "Bajando controlado"},
-    {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM",
-     "laptop": "off", "laptop_text": None, "nevera": "off_midnight",
-     "tv": "off", "battery_goal": "Amanecer con 25-40%"},
+    {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM", "nevera": "on",
+     "battery_goal": "Sin sol aún, ~-2%"},
+    {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM", "nevera": "on",
+     "battery_goal": "Sube lento con el primer sol"},
+    {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM", "nevera": "on",
+     "battery_goal": "~55-60% al mediodía"},
+    {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM", "nevera": "on",
+     "battery_goal": "65–75% a las 3 PM"},
+    {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM", "nevera": "on",
+     "battery_goal": "Mantener con el sol restante"},
+    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM", "nevera": "on",
+     "battery_goal": "70%+"},
+    {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM", "nevera": "on",
+     "battery_goal": "Cerrar el día con 68-75%"},
+    {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM", "nevera": "on",
+     "battery_goal": "Bajando controlado"},
+    {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM", "nevera": "off_midnight",
+     "battery_goal": "Amanecer con 25-40%"},
 ]
 
 
@@ -1232,29 +1225,15 @@ def _nevera_status(nevera_mode: str) -> tuple:
     return True, ""
 
 
-def _tv_status(tv_mode: str, pv_w, system_net_w, avg_soc) -> tuple:
-    """Única carga "gestionable" que queda, con dos ventanas de criterio
-    distinto: mediodía (exceso real de consumo, ya no depende de la nevera
-    porque está protegida) y noche (batería sobrada al 75%)."""
-    if tv_mode == "peak":
-        if system_net_w is None or system_net_w >= -NOISE_FLOOR_W:
-            return True, ""
-        pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
-        out_str = f"{round(pv_w - system_net_w)} W" if pv_w is not None else "N/D"
-        return False, f"salida {out_str} > entrada {pv_str}"
-    if tv_mode == "evening":
-        if avg_soc is not None and avg_soc >= TV_EVENING_THRESHOLD:
-            return True, "llegaste sobrado al anochecer"
-        soc_str = f"{avg_soc:.1f}%" if avg_soc is not None else "N/D"
-        return False, f"necesita {TV_EVENING_THRESHOLD}%+, vas en {soc_str}"
-    return False, ""
-
-
-def _powerbank_status(now) -> tuple:
-    minute_of_day = now.hour * 60 + now.minute
-    if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
+def _surplus_status(pv_w, system_net_w) -> tuple:
+    """Regla común para laptop y TV (cargas de una sola unidad, sin ventana
+    horaria): van en verde si el sistema no está en déficit real ahora
+    mismo, a cualquier hora del día."""
+    if system_net_w is None or system_net_w >= -NOISE_FLOOR_W:
         return True, ""
-    return False, ""
+    pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
+    out_str = f"{round(pv_w - system_net_w)} W" if pv_w is not None else "N/D"
+    return False, f"salida {out_str} > entrada {pv_str}"
 
 
 POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
@@ -1292,21 +1271,11 @@ def build_load_advisor_message(m: dict = None) -> str:
         ]
     else:
         nevera_ok, nevera_detail = _nevera_status(block["nevera"])
-        tv_ok, tv_detail = _tv_status(block["tv"], m["pv_w"], m["system_net_w"], m["avg_soc"])
-        pb_ok, _pb_detail = _powerbank_status(now)
-        pb_available_w = m["system_net_w"] if pb_ok else 0
-        if not pb_ok:
-            pb_reason = "fuera de la ventana fija (10 AM–2 PM)"
-        elif pb_available_w is None or pb_available_w <= 0:
-            pb_reason = "sin excedente ahora mismo"
-        else:
-            pb_reason = ""
-        if block["laptop"] == "full":
-            laptop_line = _status_line("💻", "Laptop", True, ["laptop"])
-        elif block["laptop"] == "off":
-            laptop_line = _status_line("💻", "Laptop", False, ["laptop"])
-        else:
-            laptop_line = _status_line("💻", "Laptop", True, ["laptop"], block["laptop_text"])
+        laptop_ok, laptop_detail = _surplus_status(m["pv_w"], m["system_net_w"])
+        tv_ok, tv_detail = _surplus_status(m["pv_w"], m["system_net_w"])
+        laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
+        pb_available_w = m["system_net_w"]
+        pb_reason = "sin excedente ahora mismo" if (pb_available_w is None or pb_available_w <= 0) else ""
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
