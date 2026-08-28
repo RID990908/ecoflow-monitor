@@ -1238,7 +1238,7 @@ def _allocate_budget(watts: int, available_w) -> tuple:
     remaining = max(0, available_w)
     if watts <= remaining:
         return True, "", remaining - watts
-    return False, f"necesita {watts} W, quedan {round(remaining)} W de excedente", remaining
+    return False, f"necesitas {watts} W, tienes {round(remaining)} W", remaining
 
 
 def _nevera_status(nevera_mode: str) -> tuple:
