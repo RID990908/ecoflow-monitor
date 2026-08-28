@@ -782,7 +782,8 @@ HELP_TEXT = (
     "qué encender/apagar según el plan. Chequeo de carga AC cada "
     f"{AC_CHECK_MINUTES:g} min, también te aviso al llegar a 100% de carga.\n\n"
     "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
-    "(65-75% a las 3 PM, 70%+ al anochecer), te aviso antes de que pase."
+    "(65-75% a las 3 PM, 100% al anochecer si te mantenés en nevera+internet), "
+    "te aviso antes de que pase."
 )
 START_TEXT = "👋 Hola, soy el monitor de tu EcoFlow.\n\n" + HELP_TEXT
 
@@ -1155,9 +1156,9 @@ _LOAD_SCHEDULE = [
     {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM", "nevera": "on",
      "battery_goal": "Mantener con el sol restante"},
     {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM", "nevera": "on",
-     "battery_goal": "70%+"},
+     "battery_goal": "Cerca del 100% si se mantuvo solo nevera/internet"},
     {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM", "nevera": "on",
-     "battery_goal": "Cerrar el día con 68-75%"},
+     "battery_goal": "Cerrar el día en 100%"},
     {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM", "nevera": "on",
      "battery_goal": "Bajando controlado"},
     {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM", "nevera": "off_midnight",
@@ -1362,8 +1363,9 @@ def _weak_charge_note(pv_w, delta2_net_w, extra_net_w):
 # --- Alerta dinámica de proyección: a diferencia del mensaje de /cargas (que
 # describe el plan), esto analiza el ritmo de descarga actual y proyecta si la
 # batería va a llegar por debajo de la meta del próximo checkpoint del plan
-# (10% al amanecer, ~55-60% al mediodía, 65-75% a las 3 PM, 70%+ al cierre
-# del día). Los checkpoints son cíclicos: si ya pasaron todos los de hoy,
+# (10% al amanecer, ~55-60% al mediodía, 65-75% a las 3 PM, 100% al cierre
+# del día — este último solo es realista con nevera+internet nomás). Los
+# checkpoints son cíclicos: si ya pasaron todos los de hoy,
 # se proyecta contra el primero de mañana (el amanecer), cruzando la
 # medianoche — así de 8 PM en adelante el mensaje evalúa si vas a sobrevivir
 # la noche, no se queda mudo hasta el mediodía siguiente. Avisa ANTES de que
@@ -1375,8 +1377,12 @@ BATTERY_CHECKPOINTS = [
     (6 * 60, 10, "el amanecer"),
     (12 * 60, 55, "el mediodía"),
     (15 * 60, 65, "las 3:00 PM"),
-    (19 * 60 + 30, 68, "el cierre del día (7:30 PM)"),
-]  # ordenados por hora del día — el orden importa para _next_checkpoint
+    (19 * 60 + 30, 100, "el cierre del día (7:30 PM)"),
+]  # ordenados por hora del día — el orden importa para _next_checkpoint. El
+# 100% del cierre solo es realista si te mantenés en nevera+internet nomás
+# (laptop/TV/ventilador/power bank se comen el excedente que hace falta
+# para juntar esa carga) — confirmado con el usuario, no es un objetivo
+# válido bajo uso mixto normal.
 
 _projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se avisó ese checkpoint
 
