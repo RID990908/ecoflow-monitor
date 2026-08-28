@@ -116,9 +116,11 @@ def _load_persisted_state() -> dict:
 # asumirlo solo por el horario del plan. Los watts son los reales confirmados
 # por el usuario durante la sesión, se reusan para el chequeo de anomalía en
 # build_load_advisor_message(). Las cargas con más de una unidad (ventilador,
-# power bank, luces) se desglosan una por una en vez de un solo interruptor
-# combinado, para poder marcar exactamente cuáles están prendidas.
-MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": (2, "Power bank", "🔋", 60), "luces": (3, "Luz", "💡", 20)}
+# power bank) se desglosan una por una en vez de un solo interruptor
+# combinado, para poder marcar exactamente cuáles están prendidas. Las luces
+# se sacaron de este mapa: se prenden/apagan tan seguido que registrarlas a
+# mano con /on-/off era más carga que valor.
+MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": (2, "Power bank", "🔋", 60)}
 
 DEVICE_INFO = {
     "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
@@ -770,7 +772,7 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/on <dispositivo> — marcarlo encendido (nevera, laptop, tv, ventilador, powerbank, luces)\n"
+    "/on <dispositivo> — marcarlo encendido (nevera, laptop, tv, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
@@ -790,17 +792,16 @@ _DEVICE_ALIASES = {
     "power": "powerbank", "bank": "powerbank", "powerbanks": "powerbank",
     "ventiladores": "ventilador", "fan": "ventilador", "fans": "ventilador",
     "pc": "laptop", "compu": "laptop", "computadora": "laptop",
-    "luz": "luces", "light": "luces", "lights": "luces",
 }
 
 
 def _resolve_device_keys(word: str) -> list:
     """Saca acentos/espacios y matchea contra DEVICE_INFO (o un alias común).
-    Para las cargas con varias unidades (ventilador, powerbank, luces):
+    Para las cargas con varias unidades (ventilador, powerbank):
     con número al final devuelve esa unidad puntual (ej. 'ventilador2' o
     'fan 2' → ['ventilador2']); sin número devuelve TODAS las unidades de esa
-    categoría (ej. 'luces' → ['luces1','luces2','luces3']). Lista vacía si no
-    reconoce nada."""
+    categoría (ej. 'powerbank' → ['powerbank1','powerbank2']). Lista vacía si
+    no reconoce nada."""
     word = word.strip().lower().replace(" ", "")
     word = "".join(c for c in unicodedata.normalize("NFD", word) if unicodedata.category(c) != "Mn")
     match = None
@@ -1196,7 +1197,7 @@ def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detai
 
 
 def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> str:
-    """Para power bank / ventilador / luces (varias unidades, cada una con
+    """Para power bank / ventilador (varias unidades, cada una con
     su propio watiaje): un punto 🟢/🔴 por unidad, según si esa unidad
     puntual entra en el excedente disponible ahora mismo (orden acumulativo:
     la primera que no entra dice 🔴, y de ahí en más también, aunque
@@ -1255,13 +1256,12 @@ def _powerbank_status(now) -> tuple:
 
 POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
 VENTILADOR_DEVICE_KEYS = [f"ventilador{i}" for i in range(1, MULTI_UNIT_DEVICES["ventilador"][0] + 1)]
-LUCES_DEVICE_KEYS = [f"luces{i}" for i in range(1, MULTI_UNIT_DEVICES["luces"][0] + 1)]
 
 
 def build_load_advisor_message(m: dict = None) -> str:
-    """Cinco líneas fijas (Internet, Nevera, Laptop, TV, Power bank) pero
-    cada una ya evalúa el estado real (watts, batería) en vez de ser un texto
-    fijo — no se agrega el ventilador porque nunca hay nada que decidir ahí.
+    """Nevera, Laptop, TV, Power bank y Ventilador — cada una ya evalúa el
+    estado real (watts, batería) en vez de ser un texto fijo. Internet no se
+    muestra: es fija, siempre ON, no hay nada que decidir ni informar ahí.
     Prioridad: Internet > Nevera > resto (laptop, TV, power bank). Por
     debajo de BATTERY_EMERGENCY_THRESHOLD se apaga TODO menos internet — no
     alcanza con bajar solo la nevera si el resto sigue mostrando 'ON' como si
@@ -1279,13 +1279,11 @@ def build_load_advisor_message(m: dict = None) -> str:
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
-            "✅ Internet: ON",
             _status_line("🥶", "Nevera", False, ["nevera"]),
             _status_line("💻", "Laptop", False, ["laptop"]),
             _status_line("📺", "TV", False, ["tv"]),
             _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0),
             _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0),
-            _multi_unit_line("💡", "Luces", LUCES_DEVICE_KEYS, 0),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
@@ -1302,13 +1300,11 @@ def build_load_advisor_message(m: dict = None) -> str:
             laptop_line = _status_line("💻", "Laptop", True, ["laptop"], block["laptop_text"])
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
-            "✅ Internet: ON",
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
             laptop_line,
             _status_line("📺", "TV", tv_ok, ["tv"], tv_detail),
             _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, pb_available_w),
             _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, m["system_net_w"]),
-            _multi_unit_line("💡", "Luces", LUCES_DEVICE_KEYS, m["system_net_w"]),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
