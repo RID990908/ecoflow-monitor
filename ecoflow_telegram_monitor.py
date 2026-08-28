@@ -1921,7 +1921,11 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send(200, payload, "application/json")
         elif self.path == "/api/cargas":
             try:
-                message = build_load_advisor_message() if ECOFLOW_READY else ""
+                # passive=True (misma caché que /api/status) — sin esto, cada
+                # pedido forzaba una consulta activa al EcoFlow (lenta, unos
+                # segundos), que era el retraso que se veía en el dashboard/app
+                # antes de que apareciera la sección de gestión de cargas.
+                message = build_load_advisor_message(_gather_metrics(passive=True)) if ECOFLOW_READY else ""
                 payload = json.dumps({"message": message}).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
