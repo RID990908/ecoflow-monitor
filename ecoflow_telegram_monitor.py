@@ -1041,6 +1041,13 @@ NEVERA_WATTS = 100  # para estimar si apagar la nevera alcanza para cubrir el ex
 POWERBANK_START_MIN = 10 * 60
 POWERBANK_END_MIN = 14 * 60  # regla 5: power bank siempre en 10 AM-2 PM, nunca de noche
 
+# Watts reales de las cargas "resto" (manejables/despreciables), para poder
+# ordenar qué apagar primero por magnitud en vez de solo decir "apagar todo"
+# — cortando la más grande primero se cierra el déficit con menos pasos.
+LAPTOP_WATTS = 160
+TV_WATTS = 100
+POWERBANK_WATTS = 60
+
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM",
      "laptop": "off", "laptop_text": None, "frio": "on",
@@ -1145,6 +1152,28 @@ def _laptop_line(block: dict) -> str:
     return block["laptop_text"]
 
 
+def _priority_cut_order(block: dict, now) -> str:
+    """Para la emergencia: orden de qué apagar primero si no se puede hacer
+    todo a la vez, usando los watts reales de cada carga. Prioridad: resto
+    (laptop/TV/power bank, ordenados de mayor a menor watt — la más grande
+    cierra el déficit más rápido) primero, nevera después, frío al final
+    (es el más protegido, el último recurso real)."""
+    order = []
+    if block["laptop"] != "off":
+        order.append(("Laptop", LAPTOP_WATTS))
+    if block["tv"] != "off":
+        order.append(("TV", TV_WATTS))
+    minute_of_day = now.hour * 60 + now.minute
+    if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
+        order.append(("Power bank", POWERBANK_WATTS))
+    order.sort(key=lambda c: -c[1])
+    if block["nevera"] != "off":
+        order.append(("Nevera", NEVERA_WATTS))
+    order.append(("Frío", None))
+    parts = [f"{name} ({w}W)" if w is not None else name for name, w in order]
+    return "🔻 Orden si no podés apagar todo a la vez: " + " → ".join(parts)
+
+
 def build_load_advisor_message() -> str:
     """Seis líneas fijas (Internet, Frío, Laptop, Nevera, TV, Power bank) pero
     cada una ya evalúa el estado real (watts, batería) en vez de ser un texto
@@ -1171,6 +1200,7 @@ def build_load_advisor_message() -> str:
             "💻 Laptop: OFF",
             "📺 TV: OFF",
             "🔋 Power bank: OFF",
+            _priority_cut_order(block, now),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
