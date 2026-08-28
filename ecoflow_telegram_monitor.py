@@ -1109,8 +1109,8 @@ def _nevera_line(nevera_mode: str, pv_w, system_net_w) -> tuple:
     if excess <= 0:
         return f"🥶 Nevera: ON (salida {out_str} / entrada {pv_str})", excess
     if excess <= NEVERA_WATTS:
-        return f"🥶 Nevera: APAGAR 30-40 min (salida {out_str} > entrada {pv_str})", excess
-    return f"🥶 Nevera: APAGAR (salida {out_str} > entrada {pv_str})", excess
+        return f"🥶 Nevera: OFF 30-40 min (salida {out_str} > entrada {pv_str})", excess
+    return f"🥶 Nevera: OFF (salida {out_str} > entrada {pv_str})", excess
 
 
 def _tv_line(tv_mode: str, excess, avg_soc) -> str:
@@ -1121,7 +1121,7 @@ def _tv_line(tv_mode: str, excess, avg_soc) -> str:
             return "📺 TV: OK, ventana ideal (1 h)"
         if excess <= NEVERA_WATTS:
             return "📺 TV: OK, alcanza con la nevera"
-        return "📺 TV: apagar también"
+        return "📺 TV: OFF también"
     if tv_mode == "evening":
         if avg_soc is not None and avg_soc >= TV_EVENING_THRESHOLD:
             return "📺 TV: OK (1 h), llegaste sobrado al anochecer"
@@ -1166,9 +1166,9 @@ def build_load_advisor_message() -> str:
             f"🔆 *Gestión de cargas* · {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
             "✅ Internet: ON",
-            "🧊 Frío: APAGAR",
-            "🥶 Nevera: APAGAR",
-            "💻 Laptop: APAGAR",
+            "🧊 Frío: OFF",
+            "🥶 Nevera: OFF",
+            "💻 Laptop: OFF",
             "📺 TV: OFF",
             "🔋 Power bank: OFF",
             "",
