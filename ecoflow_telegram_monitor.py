@@ -1296,33 +1296,10 @@ def build_load_advisor_message(m: dict = None) -> str:
             lines.append(f"✅ SE VA A CUMPLIR la meta: proyectás {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
         else:
             lines.append(f"⚠️ NO SE VA A CUMPLIR la meta: proyectás {proj_pct:.0f}% para {proj_label} (meta {proj_floor}%+)")
-    mismatch = _device_mismatch_note(m["pv_w"], m["system_net_w"])
-    if mismatch:
-        lines.append(mismatch)
     weak_charge = _weak_charge_note(m["pv_w"], m["delta2_net_w"], m["extra_net_w"])
     if weak_charge:
         lines.append(weak_charge)
     return "\n".join(lines)
-
-
-DEVICE_MISMATCH_MARGIN_W = 100  # tolerancia (ciclado de compresores, ruido de medición) antes de avisar
-
-
-def _device_mismatch_note(pv_w, system_net_w):
-    """Compara el consumo real del sistema contra la suma de lo que el
-    usuario marcó encendido con /on — /off. Si no coincide por más del
-    margen, avisa que probablemente hay algo prendido/apagado que no está
-    marcado con /on-/off."""
-    if pv_w is None or system_net_w is None:
-        return None
-    real_out = pv_w - system_net_w
-    expected = INTERNET_WATTS + sum(info["watts"] for key, info in DEVICE_INFO.items() if DEVICE_STATE.get(key))
-    diff = real_out - expected
-    if abs(diff) <= DEVICE_MISMATCH_MARGIN_W:
-        return None
-    if diff > 0:
-        return f"❓ Consumo real ({round(real_out)} W) supera lo marcado (~{expected} W) — puede haber algo más prendido"
-    return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado"
 
 
 WEAK_CHARGE_MIN_PV_W = 100  # sol mínimo para que tenga sentido evaluar el ritmo de carga
