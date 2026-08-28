@@ -749,18 +749,19 @@ def _format_report(m: dict) -> str:
     return "\n".join(lines)
 
 
-def build_report() -> str:
+def build_report(m: dict = None) -> str:
     if not ECOFLOW_READY:
         return (
             "📊 *Informe EcoFlow*\n\n"
             "⏳ EcoFlow todavía no está configurado (esperando ACCESS_KEY/SECRET_KEY "
             "de developer.ecoflow.com). Avisá cuando estén listas."
         )
-    try:
-        m = _gather_metrics()
-    except Exception as exc:
-        log.exception("Error consultando la Delta 2")
-        return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
+    if m is None:
+        try:
+            m = _gather_metrics()
+        except Exception as exc:
+            log.exception("Error consultando la Delta 2")
+            return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
     return _format_report(m)
 
 
@@ -934,9 +935,20 @@ def build_combined_message() -> str:
     """Junta el informe detallado y la gestión de cargas en un solo mensaje
     de Telegram — antes eran dos timers separados que mandaban dos mensajes
     casi al mismo minuto, con contenido parecido (batería, entrada/salida)
-    aunque no idéntico. Un solo envío, más fácil de leer de una."""
-    report = build_report()
-    cargas = build_load_advisor_message()
+    aunque no idéntico. Un solo envío, más fácil de leer de una. Lee
+    _gather_metrics() UNA sola vez y se la pasa a ambas partes — antes cada
+    una hacía su propia lectura por separado, el doble de consultas a la
+    Delta 2 para un mismo mensaje y con riesgo de números levemente
+    distintos entre secciones si el dato cambiaba en el medio."""
+    if not ECOFLOW_READY:
+        return build_report()
+    try:
+        m = _gather_metrics()
+    except Exception as exc:
+        log.exception("Error consultando la Delta 2")
+        return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
+    report = build_report(m)
+    cargas = build_load_advisor_message(m)
     if not cargas:
         return report
     return report + "\n\n➖➖➖➖➖➖➖➖➖➖\n\n" + cargas
@@ -1224,7 +1236,7 @@ def _laptop_line(block: dict) -> str:
     return block["laptop_text"]
 
 
-def build_load_advisor_message() -> str:
+def build_load_advisor_message(m: dict = None) -> str:
     """Cinco líneas fijas (Internet, Nevera, Laptop, TV, Power bank) pero
     cada una ya evalúa el estado real (watts, batería) en vez de ser un texto
     fijo — no se agrega el ventilador porque nunca hay nada que decidir ahí.
@@ -1236,7 +1248,8 @@ def build_load_advisor_message() -> str:
     if block is None:
         return ""
     now = datetime.now(TZ)
-    m = _gather_metrics()
+    if m is None:
+        m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
     emergency = block["nevera"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
 
