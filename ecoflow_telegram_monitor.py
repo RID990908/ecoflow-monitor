@@ -1194,7 +1194,7 @@ def _nevera_line(nevera_mode: str) -> str:
     emergencia se maneja aparte en build_load_advisor_message (ahí apaga
     todo, no solo la nevera)."""
     if nevera_mode == "off_midnight":
-        return "🥶 Nevera: OFF (apagada a las 12 AM, aguanta cerrada hasta el amanecer)"
+        return "🥶 Nevera: OFF (aguanta cerrada hasta el amanecer)"
     return "🥶 Nevera: ON"
 
 
