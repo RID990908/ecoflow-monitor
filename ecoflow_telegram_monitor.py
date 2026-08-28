@@ -1321,7 +1321,7 @@ def _device_mismatch_note(pv_w, system_net_w):
     if abs(diff) <= DEVICE_MISMATCH_MARGIN_W:
         return None
     if diff > 0:
-        return f"❓ Consumo real ({round(real_out)} W) supera lo marcado (~{expected} W) — puede haber algo más prendido que no marcaste con /on"
+        return f"❓ Consumo real ({round(real_out)} W) supera lo marcado (~{expected} W) — puede haber algo más prendido"
     return f"❓ Consumo real ({round(real_out)} W) es menor a lo marcado (~{expected} W) — revisá si algo ya está apagado"
 
 
