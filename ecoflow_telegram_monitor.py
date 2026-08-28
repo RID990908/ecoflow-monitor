@@ -1195,10 +1195,11 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
     puntual entra en el excedente disponible ahora mismo (orden acumulativo:
     la primera que no entra dice 🔴, y de ahí en más también, aunque
     individualmente pesen menos — es la lógica de "qué te podés ir
-    permitiendo en orden"). Aparte, entre paréntesis, cuántas de esas
-    unidades están REALMENTE marcadas prendidas con /on — son datos
-    distintos: uno es "cuánto aguanta el sistema", el otro es "qué tenés
-    prendido de verdad", y no tienen por qué coincidir.
+    permitiendo en orden"). El marcado real (/on-/off) va pegado a cada
+    dot con un ✓ — son datos distintos (uno es "cuánto aguanta el
+    sistema", el otro es "qué tenés prendido de verdad") pero van juntos
+    en vez de un conteo aparte. Si TODAS las unidades están marcadas, se
+    resume con un solo ✅ al final en vez de repetir el ✓ en cada una.
 
     `available_w` ya viene descontado de lo que se llevaron las cargas de
     mayor prioridad (ver _allocate_budget) — no es el excedente total del
@@ -1213,7 +1214,14 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w, rea
         else:
             dots.append("🔴")
     on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
-    line = f"{emoji} {label}: {' '.join(dots)} ({on_count}/{len(device_keys)} marcadas)"
+    if on_count == len(device_keys):
+        dots_str = " ".join(dots) + " ✅"
+    else:
+        dots_str = " ".join(
+            f"{dot}✓" if DEVICE_STATE.get(key) else dot
+            for dot, key in zip(dots, device_keys)
+        )
+    line = f"{emoji} {label}: {dots_str}"
     if reason:
         line += f" — {reason}"
     return line, remaining
