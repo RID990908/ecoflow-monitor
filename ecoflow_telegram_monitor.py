@@ -1153,7 +1153,7 @@ _LOAD_SCHEDULE = [
      "laptop": "off", "laptop_text": None, "nevera": "on",
      "tv": "off", "battery_goal": "Sin sol aún, ~-2%"},
     {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM",
-     "laptop": "min", "laptop_text": "💻 Laptop: solo si es imprescindible", "nevera": "on",
+     "laptop": "min", "laptop_text": "solo si es imprescindible", "nevera": "on",
      "tv": "off", "battery_goal": "Sube lento con el primer sol"},
     {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM",
      "laptop": "full", "laptop_text": None, "nevera": "on",
@@ -1162,7 +1162,7 @@ _LOAD_SCHEDULE = [
      "laptop": "full", "laptop_text": None, "nevera": "on",
      "tv": "peak", "battery_goal": "65–75% a las 3 PM"},
     {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
-     "laptop": "min", "laptop_text": "💻 Laptop: solo si es necesario", "nevera": "on",
+     "laptop": "min", "laptop_text": "solo si es necesario", "nevera": "on",
      "tv": "off", "battery_goal": "Mantener con el sol restante"},
     {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
      "laptop": "off", "laptop_text": None, "nevera": "on",
@@ -1188,48 +1188,57 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _nevera_line(nevera_mode: str) -> str:
-    """La nevera es ahora la carga protegida (tomó el rol que tenía el
-    frío): se mantiene ON siempre salvo emergencia de batería, y se apaga
-    programado a las 12 AM (aguanta cerrada hasta el amanecer). El caso de
-    emergencia se maneja aparte en build_load_advisor_message (ahí apaga
-    todo, no solo la nevera)."""
+def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detail: str = "") -> str:
+    """Une los dos conceptos que antes se confundían bajo el mismo 'ON/OFF':
+    el semáforo (🟢/🔴) es lo que dice el PLAN (¿se puede tener encendido
+    ahora?), y el texto ON/OFF es lo que vos marcaste de verdad en
+    /estado — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
+    dice que había que apagarlo pero lo tenés marcado prendido)."""
+    dot = "🟢" if plan_ok else "🔴"
+    actual_on = any(DEVICE_STATE.get(k) for k in device_keys)
+    state_text = "ON" if actual_on else "OFF"
+    line = f"{emoji} {label}: {dot} {state_text}"
+    if detail:
+        line += f" ({detail})"
+    return line
+
+
+def _nevera_status(nevera_mode: str) -> tuple:
+    """La nevera es la carga protegida (tomó el rol que tenía el frío): el
+    plan la da por buena siempre salvo el apagado programado a las 12 AM
+    (aguanta cerrada hasta el amanecer). El caso de emergencia de batería se
+    maneja aparte en build_load_advisor_message (ahí apaga todo)."""
     if nevera_mode == "off_midnight":
-        return "🥶 Nevera: OFF (aguanta cerrada hasta el amanecer)"
-    return "🥶 Nevera: ON"
+        return False, "aguanta cerrada hasta el amanecer"
+    return True, ""
 
 
-def _tv_line(tv_mode: str, pv_w, system_net_w, avg_soc) -> str:
+def _tv_status(tv_mode: str, pv_w, system_net_w, avg_soc) -> tuple:
     """Única carga "gestionable" que queda, con dos ventanas de criterio
     distinto: mediodía (exceso real de consumo, ya no depende de la nevera
     porque está protegida) y noche (batería sobrada al 75%)."""
     if tv_mode == "peak":
         if system_net_w is None or system_net_w >= -NOISE_FLOOR_W:
-            return "📺 TV: podés ponerla"
+            return True, ""
         pv_str = f"{pv_w} W" if pv_w is not None else "N/D"
         out_str = f"{round(pv_w - system_net_w)} W" if pv_w is not None else "N/D"
-        return f"📺 TV: OFF (salida {out_str} > entrada {pv_str})"
+        return False, f"salida {out_str} > entrada {pv_str}"
     if tv_mode == "evening":
         if avg_soc is not None and avg_soc >= TV_EVENING_THRESHOLD:
-            return "📺 TV: podés ponerla, llegaste sobrado al anochecer"
+            return True, "llegaste sobrado al anochecer"
         soc_str = f"{avg_soc:.1f}%" if avg_soc is not None else "N/D"
-        return f"📺 TV: OFF (necesita {TV_EVENING_THRESHOLD}%+, vas en {soc_str})"
-    return "📺 TV: OFF"
+        return False, f"necesita {TV_EVENING_THRESHOLD}%+, vas en {soc_str}"
+    return False, ""
 
 
-def _powerbank_line(now) -> str:
+def _powerbank_status(now) -> tuple:
     minute_of_day = now.hour * 60 + now.minute
     if POWERBANK_START_MIN <= minute_of_day < POWERBANK_END_MIN:
-        return "🔋 Power bank: podés cargarlas"
-    return "🔋 Power bank: OFF"
+        return True, ""
+    return False, ""
 
 
-def _laptop_line(block: dict) -> str:
-    if block["laptop"] == "full":
-        return "💻 Laptop: ON"
-    if block["laptop"] == "off":
-        return "💻 Laptop: OFF"
-    return block["laptop_text"]
+POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
 
 
 def build_load_advisor_message(m: dict = None) -> str:
@@ -1254,21 +1263,30 @@ def build_load_advisor_message(m: dict = None) -> str:
             f"🔆 *Gestión de cargas* · {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
             "✅ Internet: ON",
-            "🥶 Nevera: OFF",
-            "💻 Laptop: OFF",
-            "📺 TV: OFF",
-            "🔋 Power bank: OFF",
+            _status_line("🥶", "Nevera", False, ["nevera"]),
+            _status_line("💻", "Laptop", False, ["laptop"]),
+            _status_line("📺", "TV", False, ["tv"]),
+            _status_line("🔋", "Power bank", False, POWERBANK_DEVICE_KEYS),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
     else:
+        nevera_ok, nevera_detail = _nevera_status(block["nevera"])
+        tv_ok, tv_detail = _tv_status(block["tv"], m["pv_w"], m["system_net_w"], m["avg_soc"])
+        pb_ok, pb_detail = _powerbank_status(now)
+        if block["laptop"] == "full":
+            laptop_line = _status_line("💻", "Laptop", True, ["laptop"])
+        elif block["laptop"] == "off":
+            laptop_line = _status_line("💻", "Laptop", False, ["laptop"])
+        else:
+            laptop_line = _status_line("💻", "Laptop", True, ["laptop"], block["laptop_text"])
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             "✅ Internet: ON",
-            _nevera_line(block["nevera"]),
-            _laptop_line(block),
-            _tv_line(block["tv"], m["pv_w"], m["system_net_w"], m["avg_soc"]),
-            _powerbank_line(now),
+            _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
+            laptop_line,
+            _status_line("📺", "TV", tv_ok, ["tv"], tv_detail),
+            _status_line("🔋", "Power bank", pb_ok, POWERBANK_DEVICE_KEYS, pb_detail),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
