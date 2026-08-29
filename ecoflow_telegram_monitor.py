@@ -1439,9 +1439,10 @@ def _check_battery_projection(now=None) -> None:
     if projected < floor - PROJECTION_ALERT_MARGIN:
         if _projection_alerted_for.get(cp_min) != today:
             send_telegram(
-                "⚠️ *Se está yendo de control*\n"
-                f"Proyecto {projected:.0f}% para {label} (meta {floor}%+), vas en {m['avg_soc']:.1f}% "
-                f"descargando a {round(m['system_net_w'])} W. Bajá carga (nevera, TV, laptop)."
+                "⚠️ *Se está yendo de control*\n\n"
+                f"Proyectás *{projected:.0f}%* para {label} (meta {floor}%+)\n"
+                f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n\n"
+                "Bajá carga (laptop, TV, power bank, ventilador) — la nevera es protegida, no la toques."
             )
             _projection_alerted_for[cp_min] = today
             log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
