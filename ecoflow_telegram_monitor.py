@@ -1480,11 +1480,29 @@ def _check_battery_projection(now=None) -> None:
         return
     if projected < floor - PROJECTION_ALERT_MARGIN:
         if _projection_alerted_for.get(cp_min) != today:
+            # "Mejor caso": cuánto cambiaría la proyección si apagaras TODA la
+            # carga discrecional marcada (laptop, TV, ventilador, power bank —
+            # nevera/internet quedan afuera porque son protegidas). Si ni así
+            # se llega a la meta, decir "bajá carga" es engañoso: el problema
+            # no es cuánto estás gastando, es que no hay sol suficiente.
+            discretionary_keys = ["laptop", "tv"] + VENTILADOR_DEVICE_KEYS + POWERBANK_DEVICE_KEYS
+            freeable_w = sum(DEVICE_INFO[k]["watts"] for k in discretionary_keys if DEVICE_STATE.get(k))
+            best_case_net_w = m["system_net_w"] + freeable_w
+            best_proj = _project_to_checkpoint(now, m["avg_soc"], best_case_net_w)
+            best_case_helps = best_proj is not None and best_proj[2] >= floor - PROJECTION_ALERT_MARGIN
+
+            if best_case_helps:
+                action = "Bajá carga (laptop, TV, power bank, ventilador) — la nevera es protegida, no la toques."
+            else:
+                action = (
+                    "Ni apagando todo lo que se puede llegás a esa meta ahora mismo — "
+                    "no es problema de consumo, no hay sol suficiente en lo que queda."
+                )
             send_telegram(
                 "⚠️ *Se está yendo de control*\n\n"
                 f"Proyectás *{projected:.0f}%* para {label} (meta {floor}%+)\n"
                 f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n\n"
-                "Bajá carga (laptop, TV, power bank, ventilador) — la nevera es protegida, no la toques."
+                f"{action}"
             )
             _projection_alerted_for[cp_min] = today
             log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
