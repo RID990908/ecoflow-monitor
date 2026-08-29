@@ -1513,6 +1513,7 @@ def get_dashboard_status() -> dict:
         "eta_ok": eta_ok,
         "remain_duration": remain_duration,
         "threshold_text": m["threshold_line"].replace("🪫 ", "") if m["threshold_line"] else None,
+        "threshold_pct": BATTERY_LOW_THRESHOLD,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         "ports": m["ports"],
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
@@ -1697,6 +1698,16 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="devices"></div>
   </div>
 
+  <div class="devices">
+    <div class="title">Alerta de batería baja</div>
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 0">
+      <input type="number" id="alerta-input" min="0" max="100" style="width:70px;padding:6px 8px;border-radius:8px;border:1px solid #333;background:#111;color:#fff;font-size:15px">
+      <span>%</span>
+      <button id="alerta-save" style="padding:6px 14px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-size:14px;cursor:pointer">Guardar</button>
+      <span id="alerta-msg" style="font-size:13px;color:#22c55e"></span>
+    </div>
+  </div>
+
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
@@ -1765,6 +1776,11 @@ DASHBOARD_HTML = """<!doctype html>
           }
         } else {
           etaBox.classList.remove('visible');
+        }
+
+        const alertaInput = document.getElementById('alerta-input');
+        if (d.threshold_pct != null && document.activeElement !== alertaInput) {
+          alertaInput.value = d.threshold_pct;
         }
 
         document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
@@ -1894,6 +1910,30 @@ DASHBOARD_HTML = """<!doctype html>
       } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
     }
 
+    document.getElementById('alerta-save').addEventListener('click', async () => {
+      const msg = document.getElementById('alerta-msg');
+      const pct = parseInt(document.getElementById('alerta-input').value, 10);
+      if (isNaN(pct) || pct < 0 || pct > 100) {
+        msg.style.color = '#ef4444';
+        msg.textContent = 'Poné un número entre 0 y 100';
+        return;
+      }
+      try {
+        const res = await fetch('/api/alerta', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ threshold_pct: pct }),
+        });
+        if (!res.ok) throw new Error();
+        msg.style.color = '#22c55e';
+        msg.textContent = 'Guardado ✓';
+        setTimeout(() => { msg.textContent = ''; }, 2000);
+      } catch (e) {
+        msg.style.color = '#ef4444';
+        msg.textContent = 'No se pudo guardar';
+      }
+    });
+
     refresh();
     loadDevices();
     loadCargas();
@@ -1980,6 +2020,22 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 DEVICE_STATE[device] = bool(body.get("on"))
                 _save_persisted_state()
                 payload = json.dumps(get_device_state_payload()).encode("utf-8")
+                self._send(200, payload, "application/json")
+            except Exception as exc:
+                payload = json.dumps({"error": str(exc)}).encode("utf-8")
+                self._send(500, payload, "application/json")
+        elif self.path == "/api/alerta":
+            global BATTERY_LOW_THRESHOLD
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                pct = int(body.get("threshold_pct"))
+                if not (0 <= pct <= 100):
+                    self._send(400, b'{"error":"debe ser un porcentaje entre 0 y 100"}', "application/json")
+                    return
+                BATTERY_LOW_THRESHOLD = pct
+                _save_persisted_state()
+                payload = json.dumps({"threshold_pct": BATTERY_LOW_THRESHOLD}).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
                 payload = json.dumps({"error": str(exc)}).encode("utf-8")
