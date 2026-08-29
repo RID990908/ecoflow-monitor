@@ -1374,7 +1374,7 @@ def _weak_charge_note(pv_w, delta2_net_w, extra_net_w):
 PROJECTION_CHECK_MINUTES = 10
 PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
 BATTERY_CHECKPOINTS = [
-    (6 * 60, 20, "el amanecer"),
+    (6 * 60, 15, "el amanecer"),
     (12 * 60, 55, "el mediodía"),
     (15 * 60, 65, "las 3:00 PM"),
     (19 * 60 + 30, 100, "el cierre del día (7:30 PM)"),
