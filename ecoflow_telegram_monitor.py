@@ -1263,6 +1263,8 @@ def _nevera_status(nevera_mode: str) -> tuple:
 POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
 VENTILADOR_DEVICE_KEYS = [f"ventilador{i}" for i in range(1, MULTI_UNIT_DEVICES["ventilador"][0] + 1)]
 
+_BATTERY_EMERGENCY_ACTIVE = False  # trackea la transición para loguear una sola vez al entrar/salir, no en cada llamada
+
 
 def build_load_advisor_message(m: dict = None) -> str:
     """Nevera, Laptop, TV, Power bank y Ventilador — cada una ya evalúa el
@@ -1285,6 +1287,14 @@ def build_load_advisor_message(m: dict = None) -> str:
         m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
     emergency = block["nevera"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
+
+    global _BATTERY_EMERGENCY_ACTIVE
+    if emergency and not _BATTERY_EMERGENCY_ACTIVE:
+        log.warning("Emergencia de batería iniciada: %.1f%% (umbral %d%%)", m["avg_soc"], BATTERY_EMERGENCY_THRESHOLD)
+        _BATTERY_EMERGENCY_ACTIVE = True
+    elif not emergency and _BATTERY_EMERGENCY_ACTIVE:
+        log.info("Emergencia de batería terminada: %.1f%%", m["avg_soc"])
+        _BATTERY_EMERGENCY_ACTIVE = False
 
     if emergency:
         vent_line, _ = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0)
