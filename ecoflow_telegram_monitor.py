@@ -672,9 +672,9 @@ def _gather_metrics(passive: bool = False) -> dict:
         }
 
     if soc_extra is not None:
-        threshold_line = _time_to_threshold_line(avg_soc, system_net_w, 2, 20)
+        threshold_line = _time_to_threshold_line(avg_soc, system_net_w, 2, BATTERY_LOW_THRESHOLD)
     else:
-        threshold_line = _time_to_threshold_line(soc_delta2, delta2_net_w, 1, 20)
+        threshold_line = _time_to_threshold_line(soc_delta2, delta2_net_w, 1, BATTERY_LOW_THRESHOLD)
 
     ports = [
         ("USB-C", _pick(data, "pd.typec1Watts")),
