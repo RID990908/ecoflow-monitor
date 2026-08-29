@@ -1421,6 +1421,31 @@ def _project_to_checkpoint(now, avg_soc, system_net_w):
     return label, floor, max(0.0, min(100.0, projected))
 
 
+_checkpoint_logged_for = {}  # {cp_min: date} último día que ya se dejó constancia de ese checkpoint
+
+
+def _log_checkpoint_result(now, avg_soc) -> None:
+    """Deja constancia en los logs de Railway (no manda nada a Telegram) de
+    si cada checkpoint del plan se cumplió o no apenas pasa su horario, y
+    por cuántos puntos — para tener un registro histórico sin depender de
+    revisar los mensajes uno por uno. Se ejecuta en la misma cadencia que
+    el chequeo de proyección (cada PROJECTION_CHECK_MINUTES), así que basta
+    con loguear una vez por checkpoint/día apenas su hora cae dentro de esa
+    ventana."""
+    if avg_soc is None:
+        return
+    minute_of_day = now.hour * 60 + now.minute
+    today = now.date()
+    for cp_min, floor, label in BATTERY_CHECKPOINTS:
+        if cp_min <= minute_of_day < cp_min + PROJECTION_CHECK_MINUTES and _checkpoint_logged_for.get(cp_min) != today:
+            diff = avg_soc - floor
+            if diff >= 0:
+                log.info("Checkpoint '%s' CUMPLIDO: %.1f%% (meta %d%%+, sobró %.1f pts)", label, avg_soc, floor, diff)
+            else:
+                log.info("Checkpoint '%s' NO CUMPLIDO: %.1f%% (meta %d%%+, faltaron %.1f pts)", label, avg_soc, floor, -diff)
+            _checkpoint_logged_for[cp_min] = today
+
+
 def _check_battery_projection(now=None) -> None:
     """Un chequeo: proyecta el %SOC en el próximo checkpoint con el ritmo de
     descarga actual y avisa (una vez por checkpoint/día, con rearme si se
@@ -1430,6 +1455,7 @@ def _check_battery_projection(now=None) -> None:
     if not (LOAD_ADVISOR_START_MIN <= minute_of_day < LOAD_ADVISOR_END_MIN):
         return
     m = _gather_metrics()
+    _log_checkpoint_result(now, m["avg_soc"])
     proj = _project_to_checkpoint(now, m["avg_soc"], m["system_net_w"])
     if proj is None:
         return
