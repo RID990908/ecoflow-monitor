@@ -1126,15 +1126,15 @@ def watchdog_timer() -> None:
 
 
 # --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
-# 19:30, que dice qué debería estar encendido/apagado según el bloque horario
-# del plan (que cubre las 24 h: la noche solo se consulta por /cargas, el
+# 19:30, que dice qué debería estar encendido/apagado según el excedente real
+# del sistema (que cubre las 24 h: la noche solo se consulta por /cargas, el
 # timer automático no manda mensajes fuera de esa ventana). El frío
 # (congelador) se eliminó del sistema — la NEVERA tomó su rol: es la carga
 # protegida, se mantiene ON siempre salvo emergencia de batería, y se apaga
-# programado a las 12 AM (aguanta cerrada hasta el amanecer). Ya no hay
-# ninguna carga que se apague por exceso de consumo salvo la TV — es la
-# única "gestionable" que queda, con dos ventanas de criterio distinto:
-# mediodía (exceso real de consumo) y 6:30-7:30 PM (batería sobrada al 75%).
+# programado a las 12 AM (aguanta cerrada hasta el amanecer). Laptop,
+# Ventilador, Power bank y TV se reparten el excedente real en orden de
+# prioridad (ver build_load_advisor_message) — ninguna tiene ventana horaria
+# fija, todas se evalúan contra system_net_w en el momento de la consulta.
 LOAD_ADVISOR_START_MIN = 6 * 60
 LOAD_ADVISOR_END_MIN = 24 * 60  # el timer automatico llega hasta las 12 AM
 BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > nevera > resto
@@ -1162,7 +1162,7 @@ _LOAD_SCHEDULE = [
     {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM", "nevera": "on",
      "battery_goal": "Bajando controlado"},
     {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM", "nevera": "off_midnight",
-     "battery_goal": "Amanecer con 25-40%"},
+     "battery_goal": "Amanecer con 15%+"},
 ]
 
 
@@ -1373,8 +1373,9 @@ def _weak_charge_note(pv_w, delta2_net_w, extra_net_w):
 # --- Alerta dinámica de proyección: a diferencia del mensaje de /cargas (que
 # describe el plan), esto analiza el ritmo de descarga actual y proyecta si la
 # batería va a llegar por debajo de la meta del próximo checkpoint del plan
-# (10% al amanecer, ~55-60% al mediodía, 65-75% a las 3 PM, 100% al cierre
-# del día — este último solo es realista con nevera+internet nomás). Los
+# (15% al amanecer, 20% a las 9 AM, ~55-60% al mediodía, 65-75% a las 3 PM,
+# 100% al cierre del día — este último solo es realista con nevera+internet
+# nomás). Los
 # checkpoints son cíclicos: si ya pasaron todos los de hoy,
 # se proyecta contra el primero de mañana (el amanecer), cruzando la
 # medianoche — así de 8 PM en adelante el mensaje evalúa si vas a sobrevivir
