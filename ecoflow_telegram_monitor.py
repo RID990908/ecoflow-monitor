@@ -1375,10 +1375,16 @@ PROJECTION_CHECK_MINUTES = 10
 PROJECTION_ALERT_MARGIN = 5  # puntos porcentuales por debajo de la meta para disparar la alerta
 BATTERY_CHECKPOINTS = [
     (6 * 60, 15, "el amanecer"),
+    (9 * 60, 20, "las 9:00 AM"),
     (12 * 60, 55, "el mediodía"),
     (15 * 60, 65, "las 3:00 PM"),
     (19 * 60 + 30, 100, "el cierre del día (7:30 PM)"),
 ]  # ordenados por hora del día — el orden importa para _next_checkpoint. El
+# checkpoint de las 9 AM coincide con el cierre del bloque de gestión de
+# cargas de esa franja — así la proyección de /cargas siempre habla del
+# mismo horizonte que el período que se está mostrando, en vez de saltar
+# directo al mediodía y generar confusión (ej. "estamos en el período de
+# hasta las 9 pero dice que para el mediodía"). El
 # 100% del cierre solo es realista si te mantenés en nevera+internet nomás
 # (laptop/TV/ventilador/power bank se comen el excedente que hace falta
 # para juntar esa carga) — confirmado con el usuario, no es un objetivo
