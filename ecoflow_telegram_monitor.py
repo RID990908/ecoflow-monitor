@@ -1678,6 +1678,7 @@ DASHBOARD_HTML = """<!doctype html>
     background: #141b22; border-radius: 14px; padding: 12px 16px; margin-top: 8px;
   }
   .battery-row .name { font-size: 14px; color: #cbd5e1; display: flex; align-items: center; gap: 6px; }
+  .battery-row .sub { font-size: 12px; color: #6b7684; font-weight: 400; }
   .battery-row .val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .battery-row .val.charging { color: #4ade80; }
   .battery-row .val.discharging { color: #f87171; }
@@ -1778,16 +1779,6 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="devices"></div>
   </div>
 
-  <div class="devices">
-    <div class="title">Alerta de batería baja</div>
-    <div style="display:flex;align-items:center;gap:8px;padding:8px 0">
-      <input type="number" id="alerta-input" min="0" max="100" style="width:70px;padding:6px 8px;border-radius:8px;border:1px solid #333;background:#111;color:#fff;font-size:15px">
-      <span>%</span>
-      <button id="alerta-save" style="padding:6px 14px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-size:14px;cursor:pointer">Guardar</button>
-      <span id="alerta-msg" style="font-size:13px;color:#22c55e"></span>
-    </div>
-  </div>
-
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
@@ -1858,11 +1849,6 @@ DASHBOARD_HTML = """<!doctype html>
           etaBox.classList.remove('visible');
         }
 
-        const alertaInput = document.getElementById('alerta-input');
-        if (d.threshold_pct != null && document.activeElement !== alertaInput) {
-          alertaInput.value = d.threshold_pct;
-        }
-
         document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
         document.getElementById('out-w').textContent = (d.out_w ?? '--') + ' W';
         document.getElementById('ac-w').textContent = (d.ac_w ?? '--') + ' W';
@@ -1887,14 +1873,20 @@ DASHBOARD_HTML = """<!doctype html>
         extraDir.textContent = ef.state === 'charging' ? '↑ carga' : ef.state === 'discharging' ? '↓ descarga' : '';
         extraDir.className = 'icon-dir ' + ef.cls;
 
+        function remainHtml(remain) {
+          if (!remain) return '';
+          const color = remain.charging ? '#4ade80' : '#f87171';
+          return ` · <span style="color:${color};font-weight:600">${remain.text}</span>`;
+        }
+
         let batHtml = '';
         if (d.soc_delta2 != null) {
           const f = batteryFlow(d.delta2_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)} Delta 2 — ${f.label}</div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Delta 2<div class="sub">${f.label}${remainHtml(d.delta2_remain)}</div></div></div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
         }
         if (d.soc_extra != null) {
           const f = batteryFlow(d.extra_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)} Batería Extra — ${f.label}</div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Batería Extra<div class="sub">${f.label}${remainHtml(d.extra_remain)}</div></div></div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
         }
         document.getElementById('batteries').innerHTML = batHtml;
 
@@ -1989,30 +1981,6 @@ DASHBOARD_HTML = """<!doctype html>
         }
       } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
     }
-
-    document.getElementById('alerta-save').addEventListener('click', async () => {
-      const msg = document.getElementById('alerta-msg');
-      const pct = parseInt(document.getElementById('alerta-input').value, 10);
-      if (isNaN(pct) || pct < 0 || pct > 100) {
-        msg.style.color = '#ef4444';
-        msg.textContent = 'Poné un número entre 0 y 100';
-        return;
-      }
-      try {
-        const res = await fetch('/api/alerta', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ threshold_pct: pct }),
-        });
-        if (!res.ok) throw new Error();
-        msg.style.color = '#22c55e';
-        msg.textContent = 'Guardado ✓';
-        setTimeout(() => { msg.textContent = ''; }, 2000);
-      } catch (e) {
-        msg.style.color = '#ef4444';
-        msg.textContent = 'No se pudo guardar';
-      }
-    });
 
     refresh();
     loadDevices();
