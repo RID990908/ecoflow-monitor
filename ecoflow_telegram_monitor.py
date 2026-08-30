@@ -1317,6 +1317,12 @@ def build_load_advisor_message(m: dict = None) -> str:
         log.info("Emergencia de batería terminada: %.1f%%", m["avg_soc"])
         _BATTERY_EMERGENCY_ACTIVE = False
 
+    # Ecoplay tiene alimentación propia (no consume de la Delta 2), así que
+    # siempre va en verde — el semáforo acá no significa "hay excedente para
+    # esto", significa "no hay ningún motivo del sistema para no tenerlo
+    # prendido". No se apaga ni en emergencia porque no le pega a la batería.
+    ecoplay_line = _status_line("📡", "Ecoplay", True, ["ecoplay"])
+
     if emergency:
         vent_line, _ = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0)
         pb_line, _ = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0)
@@ -1324,6 +1330,7 @@ def build_load_advisor_message(m: dict = None) -> str:
             f"🔆 *Gestión de cargas* · {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
             _status_line("🥶", "Nevera", False, ["nevera"]),
+            ecoplay_line,
             _status_line("💻", "Laptop", False, ["laptop"]),
             vent_line,
             pb_line,
@@ -1351,6 +1358,7 @@ def build_load_advisor_message(m: dict = None) -> str:
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
+            ecoplay_line,
             laptop_line,
             vent_line,
             pb_line,
