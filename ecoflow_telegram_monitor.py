@@ -125,6 +125,7 @@ MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": 
 DEVICE_INFO = {
     "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
     "laptop": {"label": "Laptop", "emoji": "💻", "watts": 160},
+    "ecoplay": {"label": "Ecoplay", "emoji": "📡", "watts": 120},
     "tv": {"label": "TV", "emoji": "📺", "watts": 100},
 }
 for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
@@ -786,7 +787,7 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/on <dispositivo> — marcarlo encendido (nevera, laptop, tv, ventilador, powerbank)\n"
+    "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, tv, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/start — qué hace este bot\n"
@@ -1285,8 +1286,8 @@ def build_load_advisor_message(m: dict = None) -> str:
     estado real (watts, batería) en vez de ser un texto fijo. Internet no se
     muestra: es fija, siempre ON, no hay nada que decidir ni informar ahí.
     Prioridad: Internet > Nevera (protegidas, no compiten por excedente) >
-    Laptop > Ventilador > Power bank > TV — estas cuatro últimas se reparten
-    el MISMO excedente (system_net_w) en orden, restando lo que cada una se
+    Laptop > Ecoplay > Ventilador > Power bank > TV — estas cinco últimas se
+    reparten el MISMO excedente (system_net_w) en orden, restando lo que cada una se
     lleva antes de evaluar la siguiente. Antes cada una miraba el excedente
     total por separado, lo que podía mostrar varias en verde a la vez aunque
     juntas no entraran. Por debajo de BATTERY_EMERGENCY_THRESHOLD se apaga
@@ -1318,6 +1319,7 @@ def build_load_advisor_message(m: dict = None) -> str:
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
             _status_line("🥶", "Nevera", False, ["nevera"]),
             _status_line("💻", "Laptop", False, ["laptop"]),
+            _status_line("📡", "Ecoplay", False, ["ecoplay"]),
             vent_line,
             pb_line,
             _status_line("📺", "TV", False, ["tv"]),
@@ -1333,6 +1335,11 @@ def build_load_advisor_message(m: dict = None) -> str:
             laptop_detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
         laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
 
+        ecoplay_ok, ecoplay_detail, available = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available)
+        if ecoplay_ok or not DEVICE_STATE.get("ecoplay"):
+            ecoplay_detail = ""
+        ecoplay_line = _status_line("📡", "Ecoplay", ecoplay_ok, ["ecoplay"], ecoplay_detail)
+
         vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
         pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
 
@@ -1345,6 +1352,7 @@ def build_load_advisor_message(m: dict = None) -> str:
             f"🔆 *Gestión de cargas* · {block['label']}",
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
             laptop_line,
+            ecoplay_line,
             vent_line,
             pb_line,
             tv_line,
@@ -1500,14 +1508,14 @@ def _check_battery_projection(now=None) -> None:
             # nevera/internet quedan afuera porque son protegidas). Si ni así
             # se llega a la meta, decir "bajá carga" es engañoso: el problema
             # no es cuánto estás gastando, es que no hay sol suficiente.
-            discretionary_keys = ["laptop", "tv"] + VENTILADOR_DEVICE_KEYS + POWERBANK_DEVICE_KEYS
+            discretionary_keys = ["laptop", "ecoplay", "tv"] + VENTILADOR_DEVICE_KEYS + POWERBANK_DEVICE_KEYS
             freeable_w = sum(DEVICE_INFO[k]["watts"] for k in discretionary_keys if DEVICE_STATE.get(k))
             best_case_net_w = m["system_net_w"] + freeable_w
             best_proj = _project_to_checkpoint(now, m["avg_soc"], best_case_net_w)
             best_case_helps = best_proj is not None and best_proj[2] >= floor - PROJECTION_ALERT_MARGIN
 
             if best_case_helps:
-                action = "Bajá carga (laptop, TV, power bank, ventilador) — la nevera es protegida, no la toques."
+                action = "Bajá carga (laptop, ecoplay, TV, power bank, ventilador) — la nevera es protegida, no la toques."
             else:
                 action = (
                     "Ni apagando todo lo que se puede llegás a esa meta ahora mismo — "
