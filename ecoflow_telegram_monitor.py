@@ -579,6 +579,20 @@ def _combined_line(soc_delta2, soc_extra, system_net_w) -> str:
 BATTERY_CAPACITY_WH = 1024  # Delta 2 y la batería extra son 1024Wh cada una
 
 
+def _battery_remain(soc, net_w) -> dict | None:
+    """Tiempo estimado por batería individual (Delta 2 o Extra por
+    separado, no el combinado): si está cargando, cuánto falta para
+    llegar al 100%; si está descargando, cuánto le queda de autonomía.
+    Misma estimación lineal que el resto del bot (watts constantes)."""
+    if soc is None or net_w is None or abs(net_w) <= NOISE_FLOOR_W:
+        return None
+    charging = net_w > 0
+    target = 100 if charging else 0
+    hours = abs(BATTERY_CAPACITY_WH * (target - soc) / 100 / net_w)
+    h, m = divmod(int(round(hours * 60)), 60)
+    return {"charging": charging, "text": f"{h}h {m}m"}
+
+
 def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
     """Estimación lineal (mismo criterio que pd.remainTime del propio
     dispositivo) de cuánto falta para que la carga llegue al umbral de
@@ -1544,6 +1558,8 @@ def get_dashboard_status() -> dict:
         return {"ready": False, "error": str(exc)}
 
     percent = m["avg_soc"] if m["avg_soc"] is not None else m["soc_delta2"]
+    delta2_remain = _battery_remain(m["soc_delta2"], m["delta2_net_w"])
+    extra_remain = _battery_remain(m["soc_extra"], m["extra_net_w"])
 
     eta_text = None
     eta_ok = None
@@ -1568,6 +1584,8 @@ def get_dashboard_status() -> dict:
         "ac_w": m["ac_w"] or 0,
         "delta2_net_w": round(m["delta2_net_w"]) if m["delta2_net_w"] is not None else None,
         "extra_net_w": round(m["extra_net_w"]) if m["extra_net_w"] is not None else None,
+        "delta2_remain": delta2_remain,
+        "extra_remain": extra_remain,
         "has_ac": m["has_ac"],
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],
