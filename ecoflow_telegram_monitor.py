@@ -2117,19 +2117,24 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        # El botón del Mini App de Telegram le pega un ?v=<timestamp> a la URL
+        # para evitar el caché del lado del cliente (ver set_dashboard_menu_button)
+        # — hay que cortar la query string antes de comparar la ruta, si no
+        # cualquier pedido con "?" cae siempre al 404 de abajo.
+        path = self.path.split("?", 1)[0]
+        if path in ("/", "/index.html"):
             self._send(200, DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
-        elif self.path == "/api/status":
+        elif path == "/api/status":
             try:
                 payload = json.dumps(get_dashboard_status()).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
                 payload = json.dumps({"ready": False, "error": str(exc)}).encode("utf-8")
                 self._send(500, payload, "application/json")
-        elif self.path == "/api/devices":
+        elif path == "/api/devices":
             payload = json.dumps(get_device_state_payload()).encode("utf-8")
             self._send(200, payload, "application/json")
-        elif self.path == "/api/cargas":
+        elif path == "/api/cargas":
             try:
                 # passive=True (misma caché que /api/status) — sin esto, cada
                 # pedido forzaba una consulta activa al EcoFlow (lenta, unos
