@@ -2091,6 +2091,27 @@ DASHBOARD_HTML = """<!doctype html>
     .batteries, #carga-estado-wrap {
       grid-row: 1;
     }
+    /* The center column is inherently much taller than the two side
+       panels (Gestión de cargas / Estado de carga), leaving a large dead
+       zone below the short panels once the ring's own diagram — mobile
+       proportions, unchanged — stretches the whole grid row's height.
+       Tighten the center column's spacing (ring size unaffected by icon
+       row alignment, only shrinks the ring itself) and cut the smaller
+       vertical margins throughout to shrink the overall page height. */
+    .ring-wrap { width: 190px; height: 190px; margin: 4px 0; }
+    /* .lateral-overlay/.lateral-overlay-left anchor at left:240px/top:120px
+       (mobile's 240px ring's right edge + vertical midpoint) — with the
+       ring now 190px here, re-anchor to match (190px edge, 95px = half). */
+    .lateral-overlay { left: 190px; top: 95px; }
+    .lateral-overlay-left { top: 95px; }
+    .pct { font-size: 38px; }
+    .pct-sub { font-size: 11px; }
+    .pct-sub .dur { font-size: 18px; }
+    .icons-row { margin-bottom: 8px; }
+    .eta-box { margin-top: 2px; padding: 10px 18px; }
+    .batteries, .devices, .cargas { margin-top: 6px; }
+    .battery-row { margin-top: 5px; padding: 9px 14px; }
+    .updated { margin-top: 8px; }
   }
 </style>
 </head>
