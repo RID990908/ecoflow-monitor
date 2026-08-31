@@ -1924,7 +1924,7 @@ DASHBOARD_HTML = """<!doctype html>
      the right becomes -90..-34 on the left, i.e. left:-90px, same width). */
   .lateral-overlay-left { position: absolute; left: 0px; top: 120px; width: 0; height: 0; }
   .lateral-overlay-left .icon-item.lateral-icon { position: absolute; left: -90px; top: 18px; }
-  .flow-connectors.lateral { width: 64px; height: 10px; overflow: visible; display: block; }
+  .flow-connectors.lateral { width: 64px; height: 40px; overflow: visible; display: block; }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt; stroke-width: 2.5;
     animation-name: flow-dash-lateral !important;
