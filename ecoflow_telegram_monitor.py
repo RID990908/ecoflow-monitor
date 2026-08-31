@@ -1884,11 +1884,14 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="io-col out"><div class="io-label" id="out-label">Salida <svg class="io-svg" viewBox="0 0 24 24" width="14" height="14"><path d="M12 21V11m0 0l-4 4m4-4l4 4M4 5h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="io-value" id="out-w">-- W</div></div>
   </div>
 
-  <!-- GEOMETRY SPEC (top, mirrored): sdd/power-flow-bottom-nodes/design §4 —
+  <!-- GEOMETRY SPEC (top, mirrored, manifold/elbow style): sdd/power-flow-bottom-nodes/design §4 —
        viewBox 0 0 300 130, hub (150,122) at the ring's top edge, nodes
-       x=50/150/250 y=8 (bottom-center of each top node), path
-       M nx,8 Q 150,65 150,122 (y-mirror of the bottom spec: node/hub y
-       swapped, same quadratic form). KEEP IN SYNC WITH App.tsx top connector
+       x=50/150/250 y=8 (bottom-center of each top node). Each side node drops
+       straight down to a shared horizontal bus at y=65 (rounded 10px corners),
+       then a single shared vertical trunk continues from the bus center
+       (150,65) down to the hub. Center node is a straight vertical line
+       (already aligned with hub x). Y-mirror of the bottom spec (node/hub y
+       swapped, same elbow form). KEEP IN SYNC WITH App.tsx top connector
        Svg (and vice-versa). -->
   <div class="flow-top-wrap">
     <div class="icons-row top">
@@ -1911,12 +1914,12 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
     <svg class="flow-connectors top" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
-      <path d="M 50,8 Q 150,65 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-ac-top" class="flow-overlay" d="M 50,8 Q 150,65 150,122"/>
-      <path d="M 150,8 Q 150,65 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-extra-top" class="flow-overlay" d="M 150,8 Q 150,65 150,122"/>
-      <path d="M 250,8 Q 150,65 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-solar-top" class="flow-overlay" d="M 250,8 Q 150,65 150,122"/>
+      <path d="M 50,8 L 50,55 Q 50,65 60,65 L 140,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-ac-top" class="flow-overlay" d="M 50,8 L 50,55 Q 50,65 60,65 L 140,65 Q 150,65 150,75 L 150,122"/>
+      <path d="M 150,8 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-extra-top" class="flow-overlay" d="M 150,8 L 150,122"/>
+      <path d="M 250,8 L 250,55 Q 250,65 240,65 L 160,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-solar-top" class="flow-overlay" d="M 250,8 L 250,55 Q 250,65 240,65 L 160,65 Q 150,65 150,75 L 150,122"/>
     </svg>
   </div>
 
@@ -1929,17 +1932,21 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </div>
 
-  <!-- GEOMETRY SPEC: sdd/power-flow-bottom-nodes/design §4 — viewBox 0 0 300 130,
-       hub (150,8), nodes x=50/150/250 y=122, path M nx,ny Q 150,65 150,8.
+  <!-- GEOMETRY SPEC (manifold/elbow style): sdd/power-flow-bottom-nodes/design §4 —
+       viewBox 0 0 300 130, hub (150,8), nodes x=50/150/250 y=122. Each side
+       node rises straight up to a shared horizontal bus at y=65 (rounded
+       10px corners), then a single shared vertical trunk continues from the
+       bus center (150,65) up to the hub. Center node is a straight vertical
+       line (already aligned with hub x).
        KEEP IN SYNC WITH App.tsx connector Svg (and vice-versa). -->
   <div class="flow-bottom-wrap">
     <svg class="flow-connectors" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
-      <path d="M 50,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-ac-out" class="flow-overlay" d="M 50,122 Q 150,65 150,8"/>
-      <path d="M 150,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-extra-in" class="flow-overlay" d="M 150,122 Q 150,65 150,8"/>
-      <path d="M 250,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-usb-out" class="flow-overlay" d="M 250,122 Q 150,65 150,8"/>
+      <path d="M 50,122 L 50,75 Q 50,65 60,65 L 140,65 Q 150,65 150,55 L 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-ac-out" class="flow-overlay" d="M 50,122 L 50,75 Q 50,65 60,65 L 140,65 Q 150,65 150,55 L 150,8"/>
+      <path d="M 150,122 L 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-extra-in" class="flow-overlay" d="M 150,122 L 150,8"/>
+      <path d="M 250,122 L 250,75 Q 250,65 240,65 L 160,65 Q 150,65 150,55 L 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-usb-out" class="flow-overlay" d="M 250,122 L 250,75 Q 250,65 240,65 L 160,65 Q 150,65 150,55 L 150,8"/>
     </svg>
     <div class="icons-row bottom">
       <div class="icon-item">
