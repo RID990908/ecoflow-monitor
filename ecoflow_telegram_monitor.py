@@ -133,8 +133,6 @@ for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
         DEVICE_INFO[f"{_base}{_i}"] = {"label": f"{_label} {_i}", "emoji": _emoji, "watts": _watts}
 DEVICE_INFO["ventilador3"]["watts"] = 10  # el tercer ventilador es más chico que los otros dos (20W)
 
-INTERNET_WATTS = 45  # promedio del rango 30-60 W, siempre ON, no se marca a mano
-
 
 def _save_persisted_state() -> None:
     try:
@@ -1282,24 +1280,20 @@ _BATTERY_EMERGENCY_ACTIVE = False  # trackea la transición para loguear una sol
 
 
 def build_load_advisor_message(m: dict = None) -> str:
-    """Nevera, Laptop, TV, Power bank y Ventilador — cada una ya evalúa el
-    estado real (watts, batería) en vez de ser un texto fijo. Internet no se
-    muestra: es fija, siempre ON, no hay nada que decidir ni informar ahí.
-    Prioridad: Internet > Nevera (protegidas, no compiten por excedente) >
-    Laptop > Ventilador > Power bank > TV — estas cuatro últimas se reparten
+    """Nevera, Laptop, TV, Power bank, Ventilador y Ecoplay — cada una ya
+    evalúa el estado real (watts, batería) en vez de ser un texto fijo.
+    Prioridad: Nevera (protegida, no compite por excedente) > Laptop >
+    Ventilador > Power bank > Ecoplay > TV — estas últimas cinco se reparten
     el MISMO excedente (system_net_w) en orden, restando lo que cada una se
-    lleva antes de evaluar la siguiente. Antes cada una miraba el excedente
+    lleva antes de evaluar la siguiente. Ecoplay va antes que TV porque ahora
+    consume de la Delta 2 como cualquier otra carga y el usuario pidió
+    mantenerla simple, sin trato especial. Antes cada una miraba el excedente
     total por separado, lo que podía mostrar varias en verde a la vez aunque
     juntas no entraran. Por debajo de BATTERY_EMERGENCY_THRESHOLD se apaga
-    TODO menos internet — no alcanza con bajar solo la nevera si el resto
-    sigue mostrando 'ON' como si nada, porque son de menor prioridad y deben
-    ceder primero/junto con ella.
-
-    Ecoplay NO aparece acá: tiene alimentación propia, no consume de la
-    Delta 2, así que no compite por excedente ni tiene sentido en el
-    semáforo de watts. Se marca con /on-/off como cualquier otro pero solo
-    para llevar registro — se ve en el panel de dispositivos (dashboard/app),
-    no en este mensaje de plan."""
+    TODO, Ecoplay incluida (sin excepción de 'es internet, dejalo prendido')
+    — no alcanza con bajar solo la nevera si el resto sigue mostrando 'ON'
+    como si nada, porque son de menor prioridad y deben ceder primero/junto
+    con ella."""
     block = _current_load_block()
     if block is None:
         return ""
@@ -1317,23 +1311,17 @@ def build_load_advisor_message(m: dict = None) -> str:
         log.info("Emergencia de batería terminada: %.1f%%", m["avg_soc"])
         _BATTERY_EMERGENCY_ACTIVE = False
 
-    # Ecoplay tiene alimentación propia (no consume de la Delta 2), así que
-    # siempre va en verde — el semáforo acá no significa "hay excedente para
-    # esto", significa "no hay ningún motivo del sistema para no tenerlo
-    # prendido". No se apaga ni en emergencia porque no le pega a la batería.
-    ecoplay_line = _status_line("📡", "Ecoplay", True, ["ecoplay"])
-
     if emergency:
         vent_line, _ = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0)
         pb_line, _ = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0)
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
-            f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo menos internet",
+            f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo",
             _status_line("🥶", "Nevera", False, ["nevera"]),
-            ecoplay_line,
             _status_line("💻", "Laptop", False, ["laptop"]),
             vent_line,
             pb_line,
+            _status_line("📡", "Ecoplay", False, ["ecoplay"]),
             _status_line("📺", "TV", False, ["tv"]),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
@@ -1350,6 +1338,15 @@ def build_load_advisor_message(m: dict = None) -> str:
         vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
         pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
 
+        # Ecoplay ahora consume de la Delta 2 como cualquier otra carga —
+        # va antes que TV en la cola porque el usuario pidió simplicidad, sin
+        # trato especial por ser "internet" (antes tenía alimentación
+        # propia y por eso quedaba fija en verde).
+        ecoplay_ok, ecoplay_detail, available = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available)
+        if ecoplay_ok or not DEVICE_STATE.get("ecoplay"):
+            ecoplay_detail = ""
+        ecoplay_line = _status_line("📡", "Ecoplay", ecoplay_ok, ["ecoplay"], ecoplay_detail)
+
         tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
         if tv_ok or not DEVICE_STATE.get("tv"):
             tv_detail = ""
@@ -1358,10 +1355,10 @@ def build_load_advisor_message(m: dict = None) -> str:
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
-            ecoplay_line,
             laptop_line,
             vent_line,
             pb_line,
+            ecoplay_line,
             tv_line,
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
@@ -1588,6 +1585,23 @@ def get_dashboard_status() -> dict:
         eta_text = f"Llena a las {r['eta']}" if eta_ok else f"Dura hasta las {r['eta']}"
         remain_duration = f"{r['hours']}h {r['minutes']}m"
 
+    # Staleness real de la telemetría MQTT: mismo criterio que watchdog_timer
+    # (línea ~1112), no solo "el fetch HTTP al propio servidor respondió".
+    # Sin esto el dashboard mostraba "conectado" con MQTT caído hace horas,
+    # porque el HTTP local seguía respondiendo con el último cache guardado.
+    with _mqtt_cache_lock:
+        entry = _device_cache.get(SN_DELTA2, {})
+        updated_at = entry.get("updated_at", 0)
+    stale_minutes = round((datetime.now(TZ).timestamp() - updated_at) / 60, 1) if updated_at else None
+    is_stale = stale_minutes is None or stale_minutes > WATCHDOG_STALE_MINUTES
+
+    now = datetime.now(TZ)
+    goal_label = goal_floor = goal_projected = goal_met = None
+    proj = _project_to_checkpoint(now, m["avg_soc"], m["system_net_w"])
+    if proj:
+        goal_label, goal_floor, goal_projected = proj
+        goal_met = goal_projected >= goal_floor
+
     return {
         "ready": True,
         "percent": percent,
@@ -1612,6 +1626,12 @@ def get_dashboard_status() -> dict:
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         "ports": m["ports"],
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
+        "stale": is_stale,
+        "stale_minutes": stale_minutes,
+        "goal_label": goal_label,
+        "goal_floor": goal_floor,
+        "goal_projected": goal_projected,
+        "goal_met": goal_met,
     }
 
 
@@ -1687,6 +1707,16 @@ DASHBOARD_HTML = """<!doctype html>
   .eta-main.eta-warn { color: #f87171; }
   .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; justify-content: center; }
   .eta-box .eta-sub .batt-icon { width: 14px; }
+  .goal-box {
+    margin-top: 8px; padding: 10px 22px; border-radius: 16px; background: #141b22;
+    text-align: center; max-width: 340px; width: 100%;
+    opacity: 0; transform: scale(0.97); visibility: hidden;
+    transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), visibility 200ms;
+  }
+  .goal-box.visible { opacity: 1; transform: scale(1); visibility: visible; }
+  .goal-box .goal-main { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .goal-main.eta-ok { color: #4ade80; }
+  .goal-main.eta-warn { color: #f87171; }
   .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
   .battery-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -1730,6 +1760,7 @@ DASHBOARD_HTML = """<!doctype html>
   }
   .live-dot.ok { background: #4ade80; }
   .live-dot.stale { background: #ef4444; animation: pulse 1s ease-in-out infinite; }
+  #mqtt-stale-text { color: #f87171; }
   @keyframes pulse { 50% { opacity: 0.3; } }
 </style>
 </head>
@@ -1777,6 +1808,10 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="eta-sub" id="eta-sub"></div>
   </div>
 
+  <div class="goal-box" id="goal-box">
+    <div class="goal-main" id="goal-main"></div>
+  </div>
+
   <div class="batteries" id="batteries"></div>
 
   <div class="ports" id="ports-wrap" style="display:none">
@@ -1797,6 +1832,7 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
+    <span id="mqtt-stale-text"></span>
   </div>
   <script>
     // Ícono de batería en SVG (verde=carga, roja=descarga, gris=estable/sin datos).
@@ -1864,6 +1900,19 @@ DASHBOARD_HTML = """<!doctype html>
           etaBox.classList.remove('visible');
         }
 
+        // Meta/checkpoint del próximo horario del plan — misma proyección
+        // que ya usa /cargas (_project_to_checkpoint), acá solo se muestra.
+        const goalBox = document.getElementById('goal-box');
+        if (d.goal_label) {
+          goalBox.classList.add('visible');
+          const goalMain = document.getElementById('goal-main');
+          const icon = d.goal_met ? '✅' : '⚠️';
+          goalMain.textContent = `${icon} Meta: ${d.goal_floor}% para ${d.goal_label} (proyectás ${d.goal_projected.toFixed(0)}%)`;
+          goalMain.className = 'goal-main ' + (d.goal_met ? 'eta-ok' : 'eta-warn');
+        } else {
+          goalBox.classList.remove('visible');
+        }
+
         document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
         document.getElementById('out-w').textContent = (d.out_w ?? '--') + ' W';
         document.getElementById('ac-w').textContent = (d.ac_w ?? '--') + ' W';
@@ -1915,8 +1964,24 @@ DASHBOARD_HTML = """<!doctype html>
           portsWrap.style.display = 'none';
         }
 
-        document.getElementById('live-dot').classList.remove('stale');
-        document.getElementById('live-dot').classList.add('ok');
+        // El fetch HTTP respondió, pero eso solo dice que el servidor está
+        // vivo — no que la telemetría MQTT de la Delta 2 sea fresca. d.stale
+        // viene calculado en el backend con el mismo criterio del watchdog
+        // (updated_at vs WATCHDOG_STALE_MINUTES), así que un MQTT caído hace
+        // horas se ve en rojo aunque el HTTP siga respondiendo.
+        const liveDot = document.getElementById('live-dot');
+        const staleText = document.getElementById('mqtt-stale-text');
+        if (d.stale) {
+          liveDot.classList.remove('ok');
+          liveDot.classList.add('stale');
+          staleText.textContent = d.stale_minutes != null
+            ? ` · sin datos de la Delta 2 hace ${Math.round(d.stale_minutes)} min`
+            : ' · sin datos de la Delta 2';
+        } else {
+          liveDot.classList.remove('stale');
+          liveDot.classList.add('ok');
+          staleText.textContent = '';
+        }
         lastSuccessAt = Date.now();
       } catch (e) {
         document.getElementById('live-dot').classList.add('stale');
