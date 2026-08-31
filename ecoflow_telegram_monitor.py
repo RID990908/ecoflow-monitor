@@ -694,15 +694,27 @@ def _format_ecoplay_message(info: dict) -> str:
     )
 
 
-def _ecoplay_cargas_suffix(now=None) -> str:
-    """Nota corta para pegar a la línea de Ecoplay en Gestión de cargas —
-    mismo dato que /ecoplay, pero solo si el usuario ya informó un %."""
+def _ecoplay_autonomy_note(now=None) -> str | None:
+    """Mismo dato que /ecoplay (% propio + hora segura de cambio o "sin
+    autonomía todavía"), sin el ' · ' de prefijo que usa _ecoplay_cargas_suffix
+    para pegarlo a una línea de texto — este devuelve None si el usuario
+    todavía no informó ningún %, para que el caller decida si mostrar algo.
+    Se usa como subtexto bajo la fila de Ecoplay en "Estado de carga" (ver
+    get_device_state_payload), ahora que Gestión de cargas no existe más."""
     if ECOPLAY_LAST_PCT is None:
-        return ""
+        return None
     info = _ecoplay_autonomy(ECOPLAY_LAST_PCT, now)
     if not info["has_autonomy"]:
-        return f" · 🔋 {info['pct']}%: sin autonomía todavía"
-    return f" · 🔋 {info['pct']}%: {info['safe_switch_text']} (Meta: {info['target_text']})"
+        return f"🔋 {info['pct']}%: sin autonomía todavía"
+    return f"🔋 {info['pct']}%: {info['safe_switch_text']} (Meta: {info['target_text']})"
+
+
+def _ecoplay_cargas_suffix(now=None) -> str:
+    """Nota corta para pegar a la línea de Ecoplay en el mensaje de Telegram
+    (build_load_advisor_message) — mismo dato que _ecoplay_autonomy_note,
+    con el ' · ' de prefijo para concatenar."""
+    note = _ecoplay_autonomy_note(now)
+    return f" · {note}" if note else ""
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -1844,6 +1856,10 @@ def get_device_state_payload() -> dict:
     # "me lo puedo permitir" — pasive=True porque este endpoint lo pollean
     # cada 2s, no puede forzar una consulta activa al EcoFlow (ver /api/cargas).
     fits = _compute_device_fits(_gather_metrics(passive=True)) if ECOFLOW_READY else {}
+    # note: subtexto opcional bajo la fila del dispositivo en "Estado de
+    # carga" — hoy solo Ecoplay lo usa (autonomía de su batería propia, el
+    # dato que vivía en Gestión de cargas antes de sacarla).
+    ecoplay_note = _ecoplay_autonomy_note()
     return {
         "devices": [
             {
@@ -1854,6 +1870,7 @@ def get_device_state_payload() -> dict:
                 "on": DEVICE_STATE[key],
                 "charged": DEVICE_CHARGED.get(key),
                 "fits": fits.get(key),
+                "note": ecoplay_note if key == "ecoplay" else None,
             }
             for key, info in DEVICE_INFO.items()
         ]
@@ -2107,6 +2124,7 @@ DASHBOARD_HTML = """<!doctype html>
     transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out);
   }
   .device-btn .name { display: flex; align-items: center; gap: 8px; }
+  .device-btn .name .sub { font-size: 12px; color: #6b7684; font-weight: 400; }
   .fit-dot { font-size: 11px; }
   .device-btn .state { font-weight: 700; font-size: 12px; letter-spacing: 0.03em; }
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
@@ -2676,7 +2694,7 @@ DASHBOARD_HTML = """<!doctype html>
       wrap.style.display = chargeable.length ? '' : 'none';
       document.getElementById('carga-estado').innerHTML = chargeable.map(dev => `
         <div class="device-btn ${dev.charged ? 'on' : 'off'}" data-key="${dev.key}">
-          <span class="name">${dev.emoji} ${dev.label}</span>
+          <div class="name">${dev.emoji} <div>${dev.label}${dev.note ? `<div class="sub">${dev.note}</div>` : ''}</div></div>
           <span class="state">${dev.charged ? '🔋 cargada' : '🪫 descargada'}</span>
         </div>
       `).join('');
