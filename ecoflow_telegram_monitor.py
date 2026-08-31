@@ -1886,7 +1886,10 @@ DASHBOARD_HTML = """<!doctype html>
   .icons-row.top { width: 300px; max-width: 100%; margin: 0 auto; margin-bottom: 0; }
   .icons-row.bottom { width: 300px; max-width: 100%; margin: 0 auto; margin-bottom: 0; }
   .lateral-wrap { display: flex; align-items: center; flex-shrink: 0; }
-  .flow-connectors.lateral { flex-shrink: 0; overflow: visible; }
+  .flow-connectors.lateral {
+    position: static; left: auto; top: auto; width: 21px; height: 12px;
+    flex-shrink: 0; overflow: visible;
+  }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt;
     animation-name: flow-dash-lateral !important;
