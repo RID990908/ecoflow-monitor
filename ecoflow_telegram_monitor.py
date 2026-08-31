@@ -168,6 +168,13 @@ DEVICE_CHARGED = {
     for b, (c, *_r) in MULTI_UNIT_DEVICES.items()
     for i in range(1, c + 1)
 }
+# Ecoplay entra a /cargado-/descargado como señal manual rápida, informativa
+# nomás — coexiste con /ecoplay <pct> (el sistema más preciso que ya existe
+# para ella) sin reemplazarlo. A diferencia de ventilador/powerbank, Ecoplay
+# es de una sola unidad, así que NO participa del sorteo de prioridad de
+# _multi_unit_line (esa función solo recibe listas de ventilador*/powerbank*
+# — no hay nada que reordenar en un grupo de uno).
+DEVICE_CHARGED["ecoplay"] = bool(_saved_device_charged.get("ecoplay", False))
 ECOPLAY_LAST_PCT = _persisted.get("ecoplay_pct")
 _DATA_STALE_ALERTED = False
 
@@ -883,9 +890,11 @@ HELP_TEXT = (
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
     "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, tv, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
-    "/cargado <ventilador/powerbank> — marcar esa(s) unidad(es) como cargada, para priorizar "
-    "el resto en el próximo reparto de excedente (ej: /cargado ventilador1 ventilador2)\n"
-    "/descargado <ventilador/powerbank> — marcarla como descargada (prioridad para recibir carga)\n"
+    "/cargado <ventilador/powerbank/ecoplay> — marcar como cargada; en ventilador/powerbank "
+    "además prioriza el resto en el próximo reparto de excedente (ej: /cargado ventilador1 ventilador2). "
+    "En ecoplay es solo informativo (no afecta prioridades) — para el dato preciso seguí usando /ecoplay <pct>\n"
+    "/descargado <ventilador/powerbank/ecoplay> — marcarla como descargada (en ventilador/powerbank, "
+    "prioridad para recibir carga)\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/ecoplay <porcentaje> — hasta qué hora aguanta la batería propia de la Ecoplay/WiFi "
     "(35-45 W) para llegar a las 7:30 AM (ej: /ecoplay 86)\n"
@@ -1833,11 +1842,16 @@ DASHBOARD_HTML = """<!doctype html>
     fill: none; stroke: #4ade80; stroke-width: 2; stroke-linecap: round;
     stroke-dasharray: 6 10; opacity: 0; transition: opacity 200ms var(--ease-out);
   }
-  #flow-ac-out.flow-overlay, #flow-extra-in.flow-overlay, #flow-usb-out.flow-overlay { stroke: #f87171; }
+  #flow-ac-out.flow-overlay, #flow-usb-out.flow-overlay, #flow-lateral-discharge.flow-overlay { stroke: #f87171; }
   .flow-overlay.active { opacity: 1; animation: flow-dash 1.1s linear infinite; }
   @keyframes flow-dash { to { stroke-dashoffset: -16; } }
   .icons-row.top { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
   .icons-row.bottom { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
+  .lateral-wrap {
+    position: absolute; top: 50%; left: 240px; transform: translateY(-50%);
+    display: flex; align-items: center;
+  }
+  .flow-connectors.lateral { flex-shrink: 0; overflow: visible; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
@@ -1923,13 +1937,17 @@ DASHBOARD_HTML = """<!doctype html>
 
   <!-- GEOMETRY SPEC (top, mirrored, manifold/elbow style): sdd/power-flow-bottom-nodes/design §4 —
        viewBox 0 0 300 130, hub (150,122) at the ring's top edge, nodes
-       x=50/150/250 y=8 (bottom-center of each top node). Each side node drops
-       straight down to a shared horizontal bus at y=65 (rounded 10px corners),
-       then a single shared vertical trunk continues from the bus center
-       (150,65) down to the hub. Center node is a straight vertical line
-       (already aligned with hub x). Y-mirror of the bottom spec (node/hub y
-       swapped, same elbow form). KEEP IN SYNC WITH App.tsx top connector
-       Svg (and vice-versa). -->
+       x=50/250 y=8 (bottom-center of each top node). AC and Solar are the
+       two OUTER positions of the original 3-slot layout (x=50/150/250) —
+       the middle slot (x=150, "Extra") was removed per
+       sdd/power-flow-bottom-nodes+load-charge-priority consolidation
+       (Extra/top + Batería/bottom merged into one lateral node next to the
+       ring, see the GEOMETRY SPEC comment on .lateral-wrap below). AC/Solar
+       paths are UNCHANGED — deleting the middle node doesn't require
+       touching their geometry. Each side node drops straight down to a
+       shared horizontal bus at y=65 (rounded 10px corners), then a single
+       shared vertical trunk continues from the bus center (150,65) down to
+       the hub. KEEP IN SYNC WITH App.tsx top connector Svg (and vice-versa). -->
   <div class="flow-top-wrap">
     <div class="icons-row top">
       <div class="icon-item">
@@ -1937,12 +1955,6 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="icon-watts" id="ac-w">0 W</div>
         <div class="icon-dir" id="ac-status"></div>
         <div class="icon-name">AC</div>
-      </div>
-      <div class="icon-item">
-        <div class="icon-circle" id="extra-circle">🔋</div>
-        <div class="icon-watts" id="extra-w">0 W</div>
-        <div class="icon-dir" id="extra-dir"></div>
-        <div class="icon-name">Extra</div>
       </div>
       <div class="icon-item">
         <div class="icon-circle" id="pv-circle">☀️</div>
@@ -1953,18 +1965,48 @@ DASHBOARD_HTML = """<!doctype html>
     <svg class="flow-connectors top" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
       <path d="M 50,8 L 50,55 Q 50,65 60,65 L 140,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
       <path id="flow-ac-top" class="flow-overlay" d="M 50,8 L 50,55 Q 50,65 60,65 L 140,65 Q 150,65 150,75 L 150,122"/>
-      <path d="M 150,8 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-extra-top" class="flow-overlay" d="M 150,8 L 150,122"/>
       <path d="M 250,8 L 250,55 Q 250,65 240,65 L 160,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
       <path id="flow-solar-top" class="flow-overlay" d="M 250,8 L 250,55 Q 250,65 240,65 L 160,65 Q 150,65 150,75 L 150,122"/>
     </svg>
   </div>
 
+  <!-- GEOMETRY SPEC (lateral node, consolidated Extra+Batería):
+       .ring-wrap is 240x240 (position:relative). .lateral-wrap is
+       position:absolute inside it: left:240px (= ring's right edge, local
+       x=240 in ring-wrap's own box), top:50% + translateY(-50%) (= ring's
+       vertical center, local y=120). It holds a SHORT STRAIGHT horizontal
+       connector (24px wide 2px SVG line, viewBox 0 0 24 4, "M 0,2 L 24,2")
+       followed by one .icon-item (84px, same as other nodes). Absolute
+       total footprint from ring-wrap's local origin: connector spans local
+       x=[240,264] y=120, icon-item center approx local x=306 y=120. Only
+       ONE of extra_in_w/extra_out_w is ever nonzero at a time (confirmed
+       reliable in production) so two separate direction paths
+       (flow-lateral-charge = ring->node, flow-lateral-discharge =
+       node->ring) are toggled active/inactive instead of rewriting `d` at
+       runtime, matching the existing top/bottom-row per-direction-path
+       convention (see DIRECTION note above .flow-bottom-wrap). RISK: on
+       narrow viewports (<~400px content width) the lateral node can
+       overflow past the right edge since it breaks out of ring-wrap's own
+       240px box — no browser/simulator available in this session to
+       visually confirm; flag for manual check. KEEP IN SYNC WITH App.tsx
+       lateral connector Svg (and vice-versa). -->
   <div class="ring-wrap">
     <div class="ring" id="ring">
       <div class="ring-inner">
         <div class="pct" id="pct">--%</div>
         <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
+      </div>
+    </div>
+    <div class="lateral-wrap">
+      <svg class="flow-connectors lateral" width="24" height="4" viewBox="0 0 24 4">
+        <path d="M 0,2 L 24,2" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,2 L 24,2"/>
+        <path id="flow-lateral-discharge" class="flow-overlay" d="M 24,2 L 0,2"/>
+      </svg>
+      <div class="icon-item">
+        <div class="icon-circle" id="lateral-circle">🔋</div>
+        <div class="icon-watts" id="lateral-w">0 W</div>
+        <div class="icon-name">Batería</div>
       </div>
     </div>
   </div>
@@ -1981,13 +2023,16 @@ DASHBOARD_HTML = """<!doctype html>
        direction of the top row, same visual geometry, so the flow-dash
        animation reads correctly for each direction. Do not "normalize"
        bottom-row d start/end to match top row without re-checking this.
-       KEEP IN SYNC WITH App.tsx connector Svg (and vice-versa). -->
+       CA and USB are the two OUTER positions of the original 3-slot layout
+       (x=50/150/250) — the middle slot (x=150, "Batería") was removed, see
+       the .lateral-wrap GEOMETRY SPEC above (Extra/top + Batería/bottom
+       consolidated into one lateral node next to the ring). CA/USB paths
+       are UNCHANGED. KEEP IN SYNC WITH App.tsx connector Svg (and
+       vice-versa). -->
   <div class="flow-bottom-wrap">
     <svg class="flow-connectors" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
       <path d="M 150,8 L 150,55 Q 150,65 140,65 L 60,65 Q 50,65 50,75 L 50,122" fill="none" stroke="#232c36" stroke-width="2"/>
       <path id="flow-ac-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 140,65 L 60,65 Q 50,65 50,75 L 50,122"/>
-      <path d="M 150,8 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-extra-in" class="flow-overlay" d="M 150,8 L 150,122"/>
       <path d="M 150,8 L 150,55 Q 150,65 160,65 L 240,65 Q 250,65 250,75 L 250,122" fill="none" stroke="#232c36" stroke-width="2"/>
       <path id="flow-usb-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 160,65 L 240,65 Q 250,65 250,75 L 250,122"/>
     </svg>
@@ -1996,11 +2041,6 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="icon-circle">🔌</div>
         <div class="icon-watts" id="ac-out-w">0 W</div>
         <div class="icon-name">CA</div>
-      </div>
-      <div class="icon-item">
-        <div class="icon-circle" id="bateria-circle">🔋</div>
-        <div class="icon-watts" id="extra-in-w">0 W</div>
-        <div class="icon-name">Batería</div>
       </div>
       <div class="icon-item">
         <div class="icon-circle" id="usb-circle"><svg class="usb-svg" viewBox="0 0 24 12" width="18" height="9"><rect x="1" y="1" width="22" height="10" rx="5" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>
@@ -2125,37 +2165,36 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
 
-        // Fila inferior (bottom row): CA / Batería / USB, misma fuente de
-        // datos que /api/status, nunca null (siempre 0 como mínimo).
+        // Fila inferior (bottom row): CA / USB, misma fuente de datos que
+        // /api/status, nunca null (siempre 0 como mínimo). extra_in_w se
+        // usa para el nodo lateral consolidado (ver más abajo), no tiene
+        // ícono propio en esta fila.
         const acOutW = d.ac_out_w || 0;
         const extraInW = d.extra_in_w || 0;
         const usbOutW = d.usb_out_w || 0;
         document.getElementById('ac-out-w').textContent = acOutW + ' W';
-        document.getElementById('extra-in-w').textContent = extraInW + ' W';
         document.getElementById('usb-out-w').textContent = usbOutW + ' W';
 
-        // Nodo "Batería" (abajo): SIEMPRE representa carga entrante
-        // (extra_in_w), nunca descarga — la descarga se ve en la fila de
-        // arriba (Extra / extra_out_w). Mismo ícono/colores que el propio
-        // estado de batería de la Delta2 (batteryIcon), reutilizado acá.
-        const bateriaCircle = document.getElementById('bateria-circle');
-        const extraInActive = extraInW > 5;
-        bateriaCircle.innerHTML = batteryIcon(extraInActive ? 'charging' : 'neutral');
-        bateriaCircle.className = 'icon-circle' + (extraInActive ? ' charging' : '');
-
-        // Nodo "Extra" (arriba): a partir de este cambio SIEMPRE muestra
-        // descarga (extra_out_w), nunca neto — la carga de la batería extra
-        // se ve en la fila de abajo (Batería / extra_in_w). Rojo/"↓ descarga"
-        // cuando supera el piso de ruido, gris neutro y visible en 0W si no.
-        const extraCircle = document.getElementById('extra-circle');
-        const extraDir = document.getElementById('extra-dir');
-        const extraOutW = d.extra_out_w || 0;
-        const extraActive = extraOutW > 5;
-        document.getElementById('extra-w').textContent = extraOutW + ' W';
-        extraCircle.innerHTML = batteryIcon(extraActive ? 'discharging' : 'neutral');
-        extraCircle.className = 'icon-circle' + (extraActive ? ' discharging' : '');
-        extraDir.textContent = extraActive ? '↓ descarga' : '';
-        extraDir.className = 'icon-dir' + (extraActive ? ' discharging' : '');
+        // Nodo lateral consolidado (fusión de los antiguos "Extra"/arriba y
+        // "Batería"/abajo en uno solo, al lado del ring): solo extra_in_w O
+        // extra_out_w es distinto de cero a la vez (nunca ambos a la vez,
+        // confirmado en producción), así que el nodo muestra el que esté
+        // activo. Descarga (extra_out_w > piso de ruido) = ícono rojo,
+        // conector rojo, animación batería->ring. Carga (extra_in_w > piso
+        // de ruido) = ícono verde, conector verde, animación ring->batería.
+        // Ninguno activo = gris neutro, línea estática sin animar.
+        const lateralCircle = document.getElementById('lateral-circle');
+        const lateralOutW = d.extra_out_w || 0;
+        const lateralInW = extraInW;
+        const lateralDischarging = lateralOutW > 5;
+        const lateralCharging = !lateralDischarging && lateralInW > 5;
+        const lateralW = lateralDischarging ? lateralOutW : lateralInW;
+        const lateralState = lateralDischarging ? 'discharging' : lateralCharging ? 'charging' : 'neutral';
+        document.getElementById('lateral-w').textContent = lateralW + ' W';
+        lateralCircle.innerHTML = batteryIcon(lateralState);
+        lateralCircle.className = 'icon-circle' + (lateralState !== 'neutral' ? ' ' + lateralState : '');
+        document.getElementById('flow-lateral-charge').classList.toggle('active', lateralCharging);
+        document.getElementById('flow-lateral-discharge').classList.toggle('active', lateralDischarging);
 
         // Overlay de flujo animado (líneas conectoras): solo se anima la
         // línea del nodo cuyo wattage actual supera el piso de ruido (5W).
@@ -2164,10 +2203,8 @@ DASHBOARD_HTML = """<!doctype html>
         const acOutActive = acOutW > 5;
         const usbActive = usbOutW > 5;
         document.getElementById('flow-ac-top').classList.toggle('active', acTopActive);
-        document.getElementById('flow-extra-top').classList.toggle('active', extraActive);
         document.getElementById('flow-solar-top').classList.toggle('active', solarActive);
         document.getElementById('flow-ac-out').classList.toggle('active', acOutActive);
-        document.getElementById('flow-extra-in').classList.toggle('active', extraInActive);
         document.getElementById('flow-usb-out').classList.toggle('active', usbActive);
 
         function remainHtml(remain) {
@@ -2397,6 +2434,26 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                     self._send(400, b'{"error":"dispositivo desconocido"}', "application/json")
                     return
                 DEVICE_STATE[device] = bool(body.get("on"))
+                _save_persisted_state()
+                payload = json.dumps(get_device_state_payload()).encode("utf-8")
+                self._send(200, payload, "application/json")
+            except Exception as exc:
+                payload = json.dumps({"error": str(exc)}).encode("utf-8")
+                self._send(500, payload, "application/json")
+        elif self.path == "/api/devices/charged":
+            # Mismo contrato que POST /api/devices, pero contra DEVICE_CHARGED
+            # en vez de DEVICE_STATE: body {"device": <key>, "charged": bool},
+            # 400 si el dispositivo no es válido (solo ventilador1-3,
+            # powerbank1-2, ecoplay), 200 con el mismo payload completo de
+            # get_device_state_payload() si se aplicó.
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                device = str(body.get("device", ""))
+                if device not in DEVICE_CHARGED:
+                    self._send(400, b'{"error":"dispositivo desconocido"}', "application/json")
+                    return
+                DEVICE_CHARGED[device] = bool(body.get("charged"))
                 _save_persisted_state()
                 payload = json.dumps(get_device_state_payload()).encode("utf-8")
                 self._send(200, payload, "application/json")
