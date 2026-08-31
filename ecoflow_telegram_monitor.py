@@ -663,15 +663,28 @@ def _ecoplay_autonomy(pct: int, now=None) -> dict:
     worst_hours = wh_available / ECOPLAY_MAX_W
     target = _next_ecoplay_target(now)
     safe_switch = target - timedelta(hours=worst_hours)
+    # Con % cerca de 0, worst_hours redondea/tiende a 0 y safe_switch colapsa
+    # sobre target (o incluso cae en el pasado si worst_hours es tan chico
+    # que target - worst_hours <= now) — no hay ventana real para pasarla a
+    # su batería propia y aguantar hasta la meta. has_autonomy marca ese
+    # caso degenerado para que el caller (mensaje de Telegram, endpoint web)
+    # no muestre una hora "válida" engañosa.
+    has_autonomy = safe_switch > now
     return {
         "pct": pct,
         "wh_available": round(wh_available),
         "target_text": target.strftime("%H:%M"),
         "safe_switch_text": safe_switch.strftime("%H:%M"),
+        "has_autonomy": has_autonomy,
     }
 
 
 def _format_ecoplay_message(info: dict) -> str:
+    if not info["has_autonomy"]:
+        return (
+            f"📡 Ecoplay al {info['pct']}%: no tiene autonomía como para pasarla a su batería propia "
+            f"ahora mismo y aguantar hasta las {info['target_text']} — no la cambies todavía."
+        )
     return (
         f"📡 Ecoplay al {info['pct']}%: podés poner la wifi en su batería propia a partir de "
         f"las ~{info['safe_switch_text']} para que aguante hasta las {info['target_text']}."
@@ -684,6 +697,8 @@ def _ecoplay_cargas_suffix(now=None) -> str:
     if ECOPLAY_LAST_PCT is None:
         return ""
     info = _ecoplay_autonomy(ECOPLAY_LAST_PCT, now)
+    if not info["has_autonomy"]:
+        return f" · 🔋 {info['pct']}%: sin autonomía todavía"
     return f" · 🔋 {info['pct']}%: {info['safe_switch_text']} (Meta: {info['target_text']})"
 
 
@@ -990,6 +1005,12 @@ def handle_command(text: str, chat_id: str) -> None:
             if resolved:
                 for k in resolved:
                     DEVICE_CHARGED[k] = cmd == "/cargado"
+                # Ecoplay es la única con sistema de % propio (/ecoplay <pct>);
+                # al marcarla descargada por acá, sincronizamos ese % a 0 para
+                # que /cargas y _ecoplay_cargas_suffix reflejen lo mismo que
+                # el flag binario. Ventilador/powerbank no tienen % análogo.
+                if cmd == "/descargado" and "ecoplay" in resolved:
+                    ECOPLAY_LAST_PCT = 0
                 _save_persisted_state()
                 lines.extend(f"{em} {DEVICE_INFO[k]['label']}: {estado}" for k in resolved)
             if invalid:
@@ -1913,6 +1934,38 @@ DASHBOARD_HTML = """<!doctype html>
     font-size: 14px; line-height: 1.7; color: #cbd5e1; white-space: pre-line;
     background: #141b22; border: 1px solid #232b33; border-radius: 10px; padding: 12px 14px;
   }
+  .ecoplay-edit-row { text-align: right; margin-top: 6px; }
+  .ecoplay-edit-link {
+    font-size: 12px; color: #9aa4af; text-decoration: none; border-bottom: 1px dashed #6b7684;
+  }
+  .ecoplay-edit-link:hover { color: #cbd5e1; }
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    align-items: center; justify-content: center; padding: 16px; z-index: 100;
+  }
+  .modal-backdrop.visible { display: flex; }
+  .modal-box {
+    background: #141b22; border: 1px solid #232b33; border-radius: 16px;
+    padding: 18px 20px; width: 100%; max-width: 320px;
+  }
+  .modal-title { font-size: 15px; font-weight: 700; color: #f5f5f5; margin-bottom: 12px; }
+  .modal-input {
+    width: 100%; font-size: 16px; padding: 10px 12px; border-radius: 10px;
+    background: #0b0f14; border: 1px solid #232b33; color: #f5f5f5;
+    font-variant-numeric: tabular-nums; margin-bottom: 12px;
+  }
+  .modal-actions { display: flex; gap: 8px; }
+  .modal-btn {
+    flex: 1; font-size: 14px; padding: 9px 12px; border-radius: 10px;
+    background: #1c232b; border: 1px solid #232b33; color: #cbd5e1; cursor: pointer;
+  }
+  .modal-btn-primary { background: #14351f; border-color: #4ade8055; color: #4ade80; font-weight: 700; }
+  .modal-result-ok, .modal-result-warn, .modal-result-error {
+    margin-top: 12px; font-size: 13px; line-height: 1.5; padding: 10px 12px; border-radius: 10px;
+  }
+  .modal-result-ok { background: #14351f; color: #4ade80; }
+  .modal-result-warn { background: #3a1616; color: #f87171; }
+  .modal-result-error { background: #3a1616; color: #f87171; }
   .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
   .live-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
@@ -1974,22 +2027,38 @@ DASHBOARD_HTML = """<!doctype html>
        .ring-wrap is 240x240 (position:relative). .lateral-wrap is
        position:absolute inside it: left:240px (= ring's right edge, local
        x=240 in ring-wrap's own box), top:50% + translateY(-50%) (= ring's
-       vertical center, local y=120). It holds a SHORT STRAIGHT horizontal
-       connector (24px wide 2px SVG line, viewBox 0 0 24 4, "M 0,2 L 24,2")
+       vertical center, local y=120). It holds a STRAIGHT horizontal
+       connector (48px wide 2px SVG line, viewBox 0 0 48 4, "M 0,2 L 48,2")
        followed by one .icon-item (84px, same as other nodes). Absolute
        total footprint from ring-wrap's local origin: connector spans local
-       x=[240,264] y=120, icon-item center approx local x=306 y=120. Only
+       x=[240,288] y=120, icon-item center approx local x=330 y=120. Only
        ONE of extra_in_w/extra_out_w is ever nonzero at a time (confirmed
        reliable in production) so two separate direction paths
        (flow-lateral-charge = ring->node, flow-lateral-discharge =
        node->ring) are toggled active/inactive instead of rewriting `d` at
        runtime, matching the existing top/bottom-row per-direction-path
-       convention (see DIRECTION note above .flow-bottom-wrap). RISK: on
-       narrow viewports (<~400px content width) the lateral node can
-       overflow past the right edge since it breaks out of ring-wrap's own
-       240px box — no browser/simulator available in this session to
-       visually confirm; flag for manual check. KEEP IN SYNC WITH App.tsx
-       lateral connector Svg (and vice-versa). -->
+       convention (see DIRECTION note above .flow-bottom-wrap).
+       LENGTH FIX (this batch): the connector already had a base muted
+       path (`stroke:#232c36`, same style as every other connector's base
+       path, e.g. the top/bottom manifold paths below) always visible
+       underneath the two animated overlays — that part was NOT the bug.
+       The actual root cause was the tiny 24px-long viewBox (0 0 24 4):
+       .flow-overlay's `stroke-dasharray: 6 10` (16-unit cycle) with
+       `stroke-linecap: round` needs real room to read as a flowing dashed
+       line, and at 24 units (barely 1.5 cycles) both the base line and the
+       animated overlay rendered as a single fat rounded blob next to the
+       52px icon circle instead of a proper line. Fixed by widening the
+       line to 48px = exactly 3 full dash-cycles (3 x 16 = 48), long enough
+       for the dash pattern to read as an actual flowing line instead of a
+       blob — same fix philosophy as the existing elbow connectors (~114-120
+       units long, 7+ cycles), just scaled down proportionally for this much
+       shorter connector. RISK: on narrow viewports (<~400px content width)
+       the lateral node can overflow past the right edge since it breaks
+       out of ring-wrap's own 240px box (widening the connector by +24px
+       this batch makes that slightly worse) — no browser/simulator
+       available in this session to visually confirm; flag for manual
+       check. KEEP IN SYNC WITH App.tsx lateral connector Svg (and
+       vice-versa). -->
   <div class="ring-wrap">
     <div class="ring" id="ring">
       <div class="ring-inner">
@@ -1998,10 +2067,10 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
     <div class="lateral-wrap">
-      <svg class="flow-connectors lateral" width="24" height="4" viewBox="0 0 24 4">
-        <path d="M 0,2 L 24,2" fill="none" stroke="#232c36" stroke-width="2"/>
-        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,2 L 24,2"/>
-        <path id="flow-lateral-discharge" class="flow-overlay" d="M 24,2 L 0,2"/>
+      <svg class="flow-connectors lateral" width="48" height="4" viewBox="0 0 48 4">
+        <path d="M 0,2 L 48,2" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,2 L 48,2"/>
+        <path id="flow-lateral-discharge" class="flow-overlay" d="M 48,2 L 0,2"/>
       </svg>
       <div class="icon-item">
         <div class="icon-circle" id="lateral-circle">🔋</div>
@@ -2061,6 +2130,26 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="cargas" id="cargas-wrap" style="display:none">
     <div class="title">Gestión de cargas</div>
     <div class="cargas-box" id="cargas-box"></div>
+    <div class="ecoplay-edit-row">
+      <a href="#" id="ecoplay-edit-link" class="ecoplay-edit-link">✏️ Editar % Ecoplay</a>
+    </div>
+  </div>
+
+  <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
+       Reusa el estilo dark de .eta-box/.cargas-box (mismo bg #141b22,
+       radios, colores de acento) en vez de inventar un lenguaje visual
+       nuevo. DOM/JS vanilla, sin framework, igual que el resto del
+       dashboard. -->
+  <div class="modal-backdrop" id="ecoplay-modal-backdrop">
+    <div class="modal-box">
+      <div class="modal-title">Ecoplay: % de batería propia</div>
+      <input type="number" id="ecoplay-pct-input" class="modal-input" min="0" max="100" placeholder="0-100">
+      <div class="modal-actions">
+        <button type="button" id="ecoplay-modal-submit" class="modal-btn modal-btn-primary">Calcular</button>
+        <button type="button" id="ecoplay-modal-close" class="modal-btn">Cerrar</button>
+      </div>
+      <div id="ecoplay-modal-result"></div>
+    </div>
   </div>
 
   <div class="devices" id="carga-estado-wrap" style="display:none">
@@ -2345,6 +2434,52 @@ DASHBOARD_HTML = """<!doctype html>
       } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
     }
 
+    // Modal para editar el % de Ecoplay sin pasar por Telegram (POST
+    // /api/ecoplay). Mismo contrato/campos que devuelve _ecoplay_autonomy,
+    // más has_autonomy para distinguir el caso "sin autonomía todavía".
+    function openEcoplayModal() {
+      document.getElementById('ecoplay-modal-result').innerHTML = '';
+      document.getElementById('ecoplay-pct-input').value = '';
+      document.getElementById('ecoplay-modal-backdrop').classList.add('visible');
+    }
+    function closeEcoplayModal() {
+      document.getElementById('ecoplay-modal-backdrop').classList.remove('visible');
+    }
+    document.getElementById('ecoplay-edit-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      openEcoplayModal();
+    });
+    document.getElementById('ecoplay-modal-close').addEventListener('click', closeEcoplayModal);
+    document.getElementById('ecoplay-modal-backdrop').addEventListener('click', (e) => {
+      if (e.target.id === 'ecoplay-modal-backdrop') closeEcoplayModal();
+    });
+    document.getElementById('ecoplay-modal-submit').addEventListener('click', async () => {
+      const resultBox = document.getElementById('ecoplay-modal-result');
+      const raw = document.getElementById('ecoplay-pct-input').value;
+      const pct = parseInt(raw, 10);
+      if (raw === '' || isNaN(pct) || pct < 0 || pct > 100) {
+        resultBox.innerHTML = '<div class="modal-result-error">Ingresá un % entero entre 0 y 100.</div>';
+        return;
+      }
+      try {
+        const res = await fetch('/api/ecoplay', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pct })
+        });
+        const d = await res.json();
+        if (!res.ok) {
+          resultBox.innerHTML = `<div class="modal-result-error">${d.error || 'Error'}</div>`;
+          return;
+        }
+        resultBox.innerHTML = d.has_autonomy
+          ? `<div class="modal-result-ok">📡 Ecoplay al ${d.pct}%: podés pasarla a su batería propia a partir de las ~${d.safe_switch_text} para que aguante hasta las ${d.target_text}.</div>`
+          : `<div class="modal-result-warn">📡 Ecoplay al ${d.pct}%: no tiene autonomía como para pasarla ahora mismo y aguantar hasta las ${d.target_text} — no la cambies todavía.</div>`;
+        loadCargas();
+      } catch (e) {
+        resultBox.innerHTML = '<div class="modal-result-error">No se pudo conectar con el servidor.</div>';
+      }
+    });
+
     refresh();
     loadDevices();
     loadCargas();
@@ -2423,6 +2558,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
+        global ECOPLAY_LAST_PCT
         if self.path == "/api/devices":
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -2453,9 +2589,36 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 if device not in DEVICE_CHARGED:
                     self._send(400, b'{"error":"dispositivo desconocido"}', "application/json")
                     return
-                DEVICE_CHARGED[device] = bool(body.get("charged"))
+                charged = bool(body.get("charged"))
+                DEVICE_CHARGED[device] = charged
+                # Mismo criterio que /descargado: Ecoplay es la única con
+                # sistema de % propio, sincronizamos su % a 0 al descargarla
+                # desde acá también (ventilador/powerbank no tienen % análogo).
+                if device == "ecoplay" and not charged:
+                    ECOPLAY_LAST_PCT = 0
                 _save_persisted_state()
                 payload = json.dumps(get_device_state_payload()).encode("utf-8")
+                self._send(200, payload, "application/json")
+            except Exception as exc:
+                payload = json.dumps({"error": str(exc)}).encode("utf-8")
+                self._send(500, payload, "application/json")
+        elif self.path == "/api/ecoplay":
+            # Contraparte web de /ecoplay <pct>: body {"pct": 0-100}, valida
+            # rango (400 si inválido), setea y persiste ECOPLAY_LAST_PCT,
+            # corre _ecoplay_autonomy y devuelve el mismo dict (incluye
+            # has_autonomy para que el frontend distinga el caso "sin
+            # autonomía todavía" del resultado normal).
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                pct = body.get("pct")
+                if not isinstance(pct, int) or isinstance(pct, bool) or not (0 <= pct <= 100):
+                    self._send(400, b'{"error":"debe ser un porcentaje entero entre 0 y 100"}', "application/json")
+                    return
+                ECOPLAY_LAST_PCT = pct
+                _save_persisted_state()
+                info = _ecoplay_autonomy(ECOPLAY_LAST_PCT)
+                payload = json.dumps(info).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
                 payload = json.dumps({"error": str(exc)}).encode("utf-8")
