@@ -2053,10 +2053,10 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
     <svg class="flow-connectors top" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
-      <path d="M 50,8 L 50,55 Q 50,65 60,65 L 140,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-ac-top" class="flow-overlay" d="M 50,8 L 50,55 Q 50,65 60,65 L 140,65 Q 150,65 150,75 L 150,122"/>
-      <path d="M 250,8 L 250,55 Q 250,65 240,65 L 160,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-solar-top" class="flow-overlay" d="M 250,8 L 250,55 Q 250,65 240,65 L 160,65 Q 150,65 150,75 L 150,122"/>
+      <path d="M 75,8 L 75,55 Q 75,65 85,65 L 140,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-ac-top" class="flow-overlay" d="M 75,8 L 75,55 Q 75,65 85,65 L 140,65 Q 150,65 150,75 L 150,122"/>
+      <path d="M 225,8 L 225,55 Q 225,65 215,65 L 160,65 Q 150,65 150,75 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-solar-top" class="flow-overlay" d="M 225,8 L 225,55 Q 225,65 215,65 L 160,65 Q 150,65 150,75 L 150,122"/>
     </svg>
   </div>
 
@@ -2165,10 +2165,10 @@ DASHBOARD_HTML = """<!doctype html>
        vice-versa). -->
   <div class="flow-bottom-wrap">
     <svg class="flow-connectors" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
-      <path d="M 150,8 L 150,55 Q 150,65 140,65 L 60,65 Q 50,65 50,75 L 50,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-ac-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 140,65 L 60,65 Q 50,65 50,75 L 50,122"/>
-      <path d="M 150,8 L 150,55 Q 150,65 160,65 L 240,65 Q 250,65 250,75 L 250,122" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-usb-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 160,65 L 240,65 Q 250,65 250,75 L 250,122"/>
+      <path d="M 150,8 L 150,55 Q 150,65 140,65 L 85,65 Q 75,65 75,75 L 75,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-ac-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 140,65 L 85,65 Q 75,65 75,75 L 75,122"/>
+      <path d="M 150,8 L 150,55 Q 150,65 160,65 L 215,65 Q 225,65 225,75 L 225,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-usb-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 160,65 L 215,65 Q 225,65 225,75 L 225,122"/>
     </svg>
     <div class="icons-row bottom">
       <div class="icon-item">
