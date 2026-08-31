@@ -1899,8 +1899,8 @@ DASHBOARD_HTML = """<!doctype html>
      full GEOMETRY SPEC + fit-check arithmetic in the HTML comment above
      .ring-wrap below. */
   .lateral-overlay { position: absolute; left: 240px; top: 120px; width: 0; height: 0; }
-  .lateral-overlay .icon-item.lateral-icon { position: absolute; left: -4px; top: 26px; }
-  .flow-connectors.lateral { width: 34px; height: 34px; overflow: visible; display: block; }
+  .lateral-overlay .icon-item.lateral-icon { position: absolute; left: 28px; top: 16px; }
+  .flow-connectors.lateral { width: 58px; height: 20px; overflow: visible; display: block; }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt; stroke-width: 2.5;
     animation-name: flow-dash-lateral !important;
@@ -2133,10 +2133,10 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
     <div class="lateral-overlay">
-      <svg class="flow-connectors lateral" width="34" height="34" viewBox="0 0 34 34">
-        <path d="M 0,0 L 16,0 Q 24,0 24,8 L 24,26" fill="none" stroke="#232c36" stroke-width="2"/>
-        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,0 L 16,0 Q 24,0 24,8 L 24,26"/>
-        <path id="flow-lateral-discharge" class="flow-overlay" d="M 24,26 L 24,8 Q 24,0 16,0 L 0,0"/>
+      <svg class="flow-connectors lateral" width="58" height="20" viewBox="0 0 58 20">
+        <path d="M 0,0 L 48,0 Q 56,0 56,8 L 56,16" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,0 L 48,0 Q 56,0 56,8 L 56,16"/>
+        <path id="flow-lateral-discharge" class="flow-overlay" d="M 56,16 L 56,8 Q 56,0 48,0 L 0,0"/>
       </svg>
       <div class="icon-item lateral-icon">
         <div class="icon-circle" id="lateral-circle">🔋</div>
