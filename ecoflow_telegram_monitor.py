@@ -619,13 +619,13 @@ def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
 
 
 # Batería propia de la Ecoplay/WiFi (power bank aparte, no reporta telemetría
-# como la Delta 2 — el usuario informa el % a mano con /ecoplay). Capacidad y
-# consumo confirmados por el usuario: ~484 Wh de capacidad total, 35-45 W de
-# consumo real de la WiFi corriendo de esa batería.
+# como la Delta 2 — el usuario informa el % a mano con /ecoplay). Capacidad
+# confirmada por el usuario: ~484 Wh. El consumo real medido es 35-45 W;
+# se usa el techo (45 W, peor caso) para el cálculo de la hora segura, ya
+# que es el que menos autonomía da y por lo tanto el que garantiza llegar
+# a la meta incluso si el consumo real termina siendo el más alto.
 ECOPLAY_BATTERY_WH = 484
-ECOPLAY_MIN_W = 35
 ECOPLAY_MAX_W = 45
-ECOPLAY_AVG_W = (ECOPLAY_MIN_W + ECOPLAY_MAX_W) / 2
 ECOPLAY_TARGET_HOUR = 7
 ECOPLAY_TARGET_MINUTE = 30
 
@@ -639,49 +639,40 @@ def _next_ecoplay_target(now) -> datetime:
 
 def _ecoplay_autonomy(pct: int, now=None) -> dict:
     """Dado el % que el usuario reporta a mano de la batería propia de la
-    Ecoplay, calcula cuánto aguanta con el rango de consumo real (35-45 W) y
-    a qué hora, como mucho, conviene pasarla a esa batería para que llegue
-    sin cortarse hasta el próximo objetivo (7:30 AM). El caso seguro es
-    siempre el peor caso (45 W): da menos horas de autonomía que el mejor
-    caso, así que arrancar recién ahí es lo que garantiza llegar a la meta
-    incluso si el consumo real termina siendo el más alto del rango."""
+    Ecoplay, calcula a qué hora, como mucho, conviene pasarla a esa batería
+    para que llegue sin cortarse hasta el próximo objetivo (7:30 AM). Usa
+    siempre el peor caso de consumo (45 W): da menos horas de autonomía que
+    el resto del rango, así que arrancar recién ahí es lo que garantiza
+    llegar a la meta incluso si el consumo real termina siendo el más alto."""
     now = now or datetime.now(TZ)
     wh_available = ECOPLAY_BATTERY_WH * pct / 100
     worst_hours = wh_available / ECOPLAY_MAX_W
-    avg_hours = wh_available / ECOPLAY_AVG_W
-    best_hours = wh_available / ECOPLAY_MIN_W
     target = _next_ecoplay_target(now)
-    worst_switch = target - timedelta(hours=worst_hours)
-    avg_switch = target - timedelta(hours=avg_hours)
-    best_switch = target - timedelta(hours=best_hours)
-
-    def _hm(hours):
-        h, m = divmod(int(round(hours * 60)), 60)
-        return f"{h}h {m}m"
-
+    safe_switch = target - timedelta(hours=worst_hours)
     return {
         "pct": pct,
         "wh_available": round(wh_available),
-        "worst_hours_text": _hm(worst_hours),
-        "avg_hours_text": _hm(avg_hours),
-        "best_hours_text": _hm(best_hours),
         "target_text": target.strftime("%H:%M"),
-        "worst_switch_text": worst_switch.strftime("%H:%M"),
-        "avg_switch_text": avg_switch.strftime("%H:%M"),
-        "best_switch_text": best_switch.strftime("%H:%M"),
-        "safe_switch_text": worst_switch.strftime("%H:%M"),
+        "safe_switch_text": safe_switch.strftime("%H:%M"),
     }
 
 
 def _format_ecoplay_message(info: dict) -> str:
     return (
-        f"📡 Ecoplay al {info['pct']}% (~{info['wh_available']} Wh disponibles), "
-        f"consumo 35-45 W:\n\n"
-        f"• Peor caso (45 W): ~{info['worst_hours_text']} de autonomía\n"
-        f"• Promedio (40 W): ~{info['avg_hours_text']} de autonomía\n"
-        f"• Mejor caso (35 W): ~{info['best_hours_text']} de autonomía\n\n"
-        f"Podés poner la wifi en su batería propia a partir de las ~{info['safe_switch_text']} "
-        f"para que aguante hasta las {info['target_text']}."
+        f"📡 Ecoplay al {info['pct']}%: podés poner la wifi en su batería propia a partir de "
+        f"las ~{info['safe_switch_text']} para que aguante hasta las {info['target_text']}."
+    )
+
+
+def _ecoplay_cargas_suffix(now=None) -> str:
+    """Nota corta para pegar a la línea de Ecoplay en Gestión de cargas —
+    mismo dato que /ecoplay, pero solo si el usuario ya informó un %."""
+    if ECOPLAY_LAST_PCT is None:
+        return ""
+    info = _ecoplay_autonomy(ECOPLAY_LAST_PCT, now)
+    return (
+        f" · 🔋 batería propia al {info['pct']}%: pasarla desde las ~{info['safe_switch_text']} "
+        f"(aguanta hasta las {info['target_text']})"
     )
 
 
@@ -1409,7 +1400,7 @@ def build_load_advisor_message(m: dict = None) -> str:
             _status_line("💻", "Laptop", False, ["laptop"]),
             vent_line,
             pb_line,
-            _status_line("📡", "Ecoplay", False, ["ecoplay"]),
+            _status_line("📡", "Ecoplay", False, ["ecoplay"]) + _ecoplay_cargas_suffix(now),
             _status_line("📺", "TV", False, ["tv"]),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
@@ -1433,7 +1424,7 @@ def build_load_advisor_message(m: dict = None) -> str:
         ecoplay_ok, ecoplay_detail, available = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available)
         if ecoplay_ok or not DEVICE_STATE.get("ecoplay"):
             ecoplay_detail = ""
-        ecoplay_line = _status_line("📡", "Ecoplay", ecoplay_ok, ["ecoplay"], ecoplay_detail)
+        ecoplay_line = _status_line("📡", "Ecoplay", ecoplay_ok, ["ecoplay"], ecoplay_detail) + _ecoplay_cargas_suffix(now)
 
         tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
         if tv_ok or not DEVICE_STATE.get("tv"):
@@ -2010,11 +2001,8 @@ DASHBOARD_HTML = """<!doctype html>
           const e = d.ecoplay;
           ecoplayWrap.style.display = '';
           document.getElementById('ecoplay-box').textContent =
-            `📡 Al ${e.pct}% (~${e.wh_available} Wh)\n` +
-            `Peor caso (45 W): ~${e.worst_hours_text}\n` +
-            `Promedio (40 W): ~${e.avg_hours_text}\n` +
-            `Mejor caso (35 W): ~${e.best_hours_text}\n\n` +
-            `Podés poner la wifi en su batería propia a partir de las ~${e.safe_switch_text} para que aguante hasta las ${e.target_text}.`;
+            `Ecoplay al ${e.pct}%: podés poner la wifi en su batería propia a partir de las ` +
+            `~${e.safe_switch_text} para que aguante hasta las ${e.target_text}.`;
         } else {
           ecoplayWrap.style.display = 'none';
         }
