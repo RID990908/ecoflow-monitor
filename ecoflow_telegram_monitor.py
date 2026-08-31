@@ -1857,20 +1857,23 @@ DASHBOARD_HTML = """<!doctype html>
   .batt-icon.batt-green { color: #4ade80; }
   .batt-icon.batt-red { color: #f87171; }
   .batt-icon.batt-gray { color: #6b7684; }
-  /* RING SIZE: shrunk from 240px to 190px (-21%) so the ring + lateral
-     battery node (connector + icon) always fits inside a narrow Telegram
-     Mini App content width. See the .ring-row GEOMETRY SPEC below for the
-     full fit-check arithmetic. .pct/.pct-sub/.dur font sizes below are
-     scaled down proportionally (x0.79) to match, so the center text stays
-     legible instead of looking cramped inside the smaller circle. */
-  .ring-wrap { position: relative; width: 190px; height: 190px; flex-shrink: 0; }
-  /* .ring-row wraps .ring-wrap + .lateral-wrap as ONE flex-centered unit
-     (instead of the old approach where .ring-wrap centered alone via the
-     body's flex column and .lateral-wrap broke out of it with
-     position:absolute). That old approach wasted half its safety margin
-     symmetrically on the ring's LEFT side, where the lateral node never
-     appears — see GEOMETRY SPEC on .lateral-wrap below for the fit math. */
-  .ring-row { display: flex; align-items: center; justify-content: center; width: 100%; max-width: 380px; margin: 6px auto 8px; }
+  /* RING SIZE: restored to the original 240px (was shrunk to 190px in an
+     earlier batch to make horizontal room for the lateral battery node,
+     back when that node lived in a shared flex row beside the ring). Now
+     that the lateral node is an absolutely-positioned overlay (see
+     .lateral-overlay below) that consumes ZERO layout width, the ring no
+     longer needs to give anything up — restored to 240px, and
+     .pct/.pct-sub/.dur font sizes below are scaled back up proportionally
+     (reversing the earlier x0.79 shrink) to match. */
+  .ring-wrap { position: relative; width: 240px; height: 240px; flex-shrink: 0; margin: 6px 0 8px; }
+  /* The ring is centered ON ITS OWN via the body's flex column
+     (align-items:center) — same simple centering the AC/Solar and CA/USB
+     rows rely on. It is NOT wrapped in a shared flex row with the lateral
+     battery node anymore (that composite-centering approach made the ring
+     look off-center relative to the rows above/below it, since the extra
+     width lived only on one side). The battery node instead overlays out
+     via .lateral-overlay, anchored to .ring-wrap's own box (position:
+     relative) but positioned absolute so it doesn't affect centering. */
   .flow-top-wrap { position: relative; width: 300px; max-width: 100%; margin: 0 auto 4px; padding-bottom: 122px; }
   .flow-bottom-wrap { position: relative; width: 300px; max-width: 100%; margin: 4px auto 0; padding-top: 122px; }
   .flow-connectors { position: absolute; left: 0; width: 100%; height: 130px; pointer-events: none; top: 0; }
@@ -1888,21 +1891,25 @@ DASHBOARD_HTML = """<!doctype html>
      .flow-top-wrap/.flow-bottom-wrap above. */
   .icons-row.top { width: 300px; max-width: 100%; margin: 0 auto; margin-bottom: 0; }
   .icons-row.bottom { width: 300px; max-width: 100%; margin: 0 auto; margin-bottom: 0; }
-  .lateral-wrap { display: flex; align-items: center; flex-shrink: 0; }
-  .flow-connectors.lateral {
-    position: static; left: auto; top: auto; width: 21px; height: 12px;
-    flex-shrink: 0; overflow: visible;
-  }
+  /* .lateral-overlay anchors at the ring's own right edge, vertical
+     midpoint (left:240px = ring width, top:120px = half of ring height).
+     width/height:0 so it consumes NO layout space of its own — it's a
+     pure positioning origin for its two absolutely/statically-flowed
+     children (the hook SVG + the battery icon-item below it). See the
+     full GEOMETRY SPEC + fit-check arithmetic in the HTML comment above
+     .ring-wrap below. */
+  .lateral-overlay { position: absolute; left: 240px; top: 120px; width: 0; height: 0; }
+  .lateral-overlay .icon-item.lateral-icon { position: absolute; left: -26px; top: 54px; }
+  .flow-connectors.lateral { width: 18px; height: 58px; overflow: visible; display: block; }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt;
     animation-name: flow-dash-lateral !important;
   }
-  @keyframes flow-dash-lateral { to { stroke-dashoffset: -14; } }
+  @keyframes flow-dash-lateral { to { stroke-dashoffset: -63; } }
   /* Compact variant of .icon-item, used ONLY by the lateral battery node.
-     Narrower (56px vs 84px) with a smaller circle/text so the node's total
-     footprint (ring + connector + icon) stays well inside a narrow
-     Telegram Mini App content width — see fit-check arithmetic in the
-     GEOMETRY SPEC comment above .ring-row in the HTML below. */
+     Narrower (56px vs 84px) with a smaller circle/text so the overlay's
+     own icon footprint stays small — see fit-check arithmetic in the
+     GEOMETRY SPEC comment above .ring-wrap in the HTML below. */
   .icon-item.lateral-icon { width: 56px; }
   .icon-item.lateral-icon .icon-circle { width: 40px; height: 40px; font-size: 17px; }
   .icon-item.lateral-icon .icon-watts { font-size: 11px; margin-top: 3px; }
@@ -1917,9 +1924,9 @@ DASHBOARD_HTML = """<!doctype html>
     width: 80%; height: 80%; border-radius: 50%; background: #0b0f14;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
   }
-  .pct { font-size: 38px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-  .pct-sub { font-size: 11px; color: #9aa4af; margin-top: 6px; text-align: center; }
-  .pct-sub .dur { font-size: 18px; color: #e5e7eb; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .pct { font-size: 48px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .pct-sub { font-size: 14px; color: #9aa4af; margin-top: 6px; text-align: center; }
+  .pct-sub .dur { font-size: 23px; color: #e5e7eb; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .eta-box {
     margin-top: 4px; padding: 14px 22px; border-radius: 16px; background: #141b22;
     text-align: center; max-width: 340px; width: 100%;
@@ -1968,11 +1975,6 @@ DASHBOARD_HTML = """<!doctype html>
     font-size: 14px; line-height: 1.7; color: #cbd5e1; white-space: pre-line;
     background: #141b22; border: 1px solid #232b33; border-radius: 10px; padding: 12px 14px;
   }
-  .ecoplay-edit-row { text-align: right; margin-top: 6px; }
-  .ecoplay-edit-link {
-    font-size: 12px; color: #9aa4af; text-decoration: none; border-bottom: 1px dashed #6b7684;
-  }
-  .ecoplay-edit-link:hover { color: #cbd5e1; }
   .modal-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
     align-items: center; justify-content: center; padding: 16px; z-index: 100;
@@ -2029,7 +2031,7 @@ DASHBOARD_HTML = """<!doctype html>
        the middle slot (x=150, "Extra") was removed per
        sdd/power-flow-bottom-nodes+load-charge-priority consolidation
        (Extra/top + Batería/bottom merged into one lateral node next to the
-       ring, see the GEOMETRY SPEC comment on .lateral-wrap below). AC/Solar
+       ring, see the GEOMETRY SPEC comment on .lateral-overlay below). AC/Solar
        paths are UNCHANGED — deleting the middle node doesn't require
        touching their geometry. Each side node drops straight down to a
        shared horizontal bus at y=65 (rounded 10px corners), then a single
@@ -2057,68 +2059,82 @@ DASHBOARD_HTML = """<!doctype html>
     </svg>
   </div>
 
-  <!-- GEOMETRY SPEC (lateral node, consolidated Extra+Batería) — REWRITTEN
-       this batch to fix two real production bugs found on an actual
-       Telegram Mini App device (narrower usable CSS width than assumed
-       during development), plus a visual-consistency request:
+  <!-- GEOMETRY SPEC (ring + lateral battery hook) — REWRITTEN this batch
+       per explicit user rejection of the previous "ring-row" composite
+       (ring + battery centered together as one flex unit). That composite
+       made the ring look off-center relative to the AC/Solar and CA/USB
+       rows above/below it, since those rows center independently while
+       the ring+battery composite had a different effective center due to
+       the extra width living only on the battery's side.
 
-       BUG 1 — clipping. Root cause: .ring-wrap used to center itself alone
-       inside the body's flex column, and .lateral-wrap broke OUT of it via
-       position:absolute (left:240px = old ring's right edge). That design
-       requires the ring to have EQUAL free margin on both its left and
-       right for centering to work, but the lateral node only ever exists
-       on the right — so half of the available narrow-viewport width was
-       being wasted on a left margin nothing used, while the right side
-       (which actually needs the room) got starved and clipped.
-       FIX: ring shrunk 240px -> 190px (see .ring-wrap comment above in
-       <style>), AND .ring-wrap + .lateral-wrap are now wrapped together in
-       a single flex row (.ring-row, width:100% max-width:380px,
-       justify-content:center) so the ring+connector+icon are centered as
-       ONE unit — the whole composite width counts against the available
-       content width once, not the ring's width doubled.
+       FIX: the ring (.ring-wrap) is centered ON ITS OWN again, directly as
+       a body flex-column child (align-items:center — same mechanism the
+       old pre-composite design used, and equivalent in spirit to the
+       margin:auto centering AC/Solar and CA/USB rows use). The battery
+       node is now a small decorative overlay: a short stub pokes out of
+       the ring's right edge, bends 90° via a rounded Q-corner (same
+       elbow visual grammar as flow-ac-top/flow-solar-top/flow-ac-out/
+       flow-usb-out), then drops straight down, with the battery icon
+       hanging below the bend — positioned via .lateral-overlay
+       (position:absolute, anchored to .ring-wrap which has
+       position:relative) so it consumes ZERO horizontal layout space and
+       cannot affect the ring's own centering; it just visually overflows
+       outward, like a badge/annotation over a chart.
+
+       Concrete geometry (ring restored to 240px this batch — was 190px
+       under the old composite design, see .ring-wrap comment above in
+       <style>): anchor point = ring's right edge, vertical midpoint
+       (left:240px, top:120px, relative to .ring-wrap). Hook path (local
+       coords from that anchor): stub 10px right -> "M 0,0 L 10,0", Q
+       quarter-corner (radius 4) bending down -> "Q 14,0 14,4", vertical
+       drop 50px -> "L 14,54". flow-lateral-discharge's `d` is the exact
+       reverse point sequence so charge/discharge read in opposite visual
+       directions (existing per-direction-path convention, see DIRECTION
+       note above .flow-bottom-wrap). The battery icon-item (.lateral-icon,
+       56px wide) sits left:-26px top:54px relative to the same anchor —
+       i.e. mostly centered under the drop line, biased slightly left so
+       its RIGHT edge (the only edge that matters for clipping, since it's
+       the side facing the viewport edge) stays as close to the ring as
+       possible. Vertically the icon ends around local y=120(anchor)+54+
+       ~69(icon height)=~243, i.e. just below the ring's own 240px bottom
+       edge, landing in the gap area before .flow-bottom-wrap's CA/USB row
+       starts (which reserves 122px of top padding for its own connector
+       SVG) — no vertical overlap.
+
        Fit-check arithmetic (content width = viewport width - 32px body
-       padding): composite footprint = ring(190) + connector(21, see BUG 2
-       below) + lateral-icon(56, new .lateral-icon compact class) = 267px.
-         320px viewport -> 288px content -> 21px spare
-         360px viewport -> 328px content -> 61px spare
-         375px viewport -> 343px content -> 76px spare
-       All comfortably positive — no clipping down to a 320px-wide device.
-
-       BUG 2 — connector didn't match the elbow/rounded-corner visual
-       language of every other connector (flow-ac-top/flow-solar-top/
-       flow-ac-out/flow-usb-out all use straight-Q-corner-straight paths).
-       FIX: replaced the flat straight stub with a short symmetric elbow
-       bump using two Q quarter-corners (same technique as the other
-       connectors, just scaled down + horizontal instead of vertical):
-       viewBox 0 0 21 12, path "M 0,6 L 5,6 Q 9,6 9,9 L 13,9 Q 17,9 17,6
-       L 21,6" — dips down 3px and back up via two rounded corners, start
-       and end both at y=6 so it still connects cleanly to the
-       vertically-centered ring/icon. 21 units = exactly 3 full
-       stroke-dasharray cycles (dasharray "3 4" = 7-unit cycle, kept from
-       the previous batch along with stroke-linecap:butt), so the dashed
-       flow animation reads as a real line, not a blob (same reasoning as
-       the prior length fix, re-applied to the new shape/length).
-       flow-lateral-discharge's `d` is the exact reverse point sequence
-       (21,6 -> 17,6 -> Q17,9 13,9 -> 9,9 -> Q9,6 5,6 -> 0,6) so the
-       charge/discharge animations flow in opposite visual directions,
-       matching the existing per-direction-path convention (see DIRECTION
-       note above .flow-bottom-wrap). Only ONE of extra_in_w/extra_out_w
-       is ever nonzero at a time (confirmed reliable in production).
+       padding, ring 240px centered via body flex, hook+icon rightmost
+       extends 30px beyond the ring's own right edge: 14(hook offset to
+       drop line) + 16(icon's right portion beyond the drop line, since
+       icon left:-26/width:56 -> right edge is 30px past the anchor) —
+       re-verify: icon right edge relative to anchor = -26+56 = 30, hook
+       offset itself (14) is INSIDE that span, so the binding rightmost
+       extent is exactly 30px past the ring's right edge):
+         320px viewport -> 288px content -> ring left offset (288-240)/2 =
+           24px -> ring abs right edge = 16(body pad)+24+240 = 280px ->
+           hook+icon rightmost = 280+30 = 310px -> 320-310 = 10px spare
+         360px viewport -> 328px content -> ring left offset 44px ->
+           ring abs right edge = 16+44+240 = 300px -> rightmost = 330px ->
+           360-330 = 30px spare
+         375px viewport -> 343px content -> ring left offset 51.5px ->
+           ring abs right edge = 16+51.5+240 = 307.5px -> rightmost =
+           337.5px -> 375-337.5 = 37.5px spare
+       All positive, including the narrowest realistic 320px target (10px
+       spare) — no clipping. This is tighter than the old composite's
+       margin (21px spare at 320px with a 190px ring) because the ring is
+       now back to full 240px size, but it still fits safely.
        KEEP IN SYNC WITH App.tsx lateral connector Svg (and vice-versa). -->
-  <div class="ring-row">
-    <div class="ring-wrap">
-      <div class="ring" id="ring">
-        <div class="ring-inner">
-          <div class="pct" id="pct">--%</div>
-          <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
-        </div>
+  <div class="ring-wrap">
+    <div class="ring" id="ring">
+      <div class="ring-inner">
+        <div class="pct" id="pct">--%</div>
+        <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
       </div>
     </div>
-    <div class="lateral-wrap">
-      <svg class="flow-connectors lateral" width="21" height="12" viewBox="0 0 21 12">
-        <path d="M 0,6 L 5,6 Q 9,6 9,9 L 13,9 Q 17,9 17,6 L 21,6" fill="none" stroke="#232c36" stroke-width="2"/>
-        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,6 L 5,6 Q 9,6 9,9 L 13,9 Q 17,9 17,6 L 21,6"/>
-        <path id="flow-lateral-discharge" class="flow-overlay" d="M 21,6 L 17,6 Q 17,9 13,9 L 9,9 Q 9,6 5,6 L 0,6"/>
+    <div class="lateral-overlay">
+      <svg class="flow-connectors lateral" width="18" height="58" viewBox="0 0 18 58">
+        <path d="M 0,0 L 10,0 Q 14,0 14,4 L 14,54" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,0 L 10,0 Q 14,0 14,4 L 14,54"/>
+        <path id="flow-lateral-discharge" class="flow-overlay" d="M 14,54 L 14,4 Q 14,0 10,0 L 0,0"/>
       </svg>
       <div class="icon-item lateral-icon">
         <div class="icon-circle" id="lateral-circle">🔋</div>
@@ -2142,7 +2158,7 @@ DASHBOARD_HTML = """<!doctype html>
        bottom-row d start/end to match top row without re-checking this.
        CA and USB are the two OUTER positions of the original 3-slot layout
        (x=50/150/250) — the middle slot (x=150, "Batería") was removed, see
-       the .lateral-wrap GEOMETRY SPEC above (Extra/top + Batería/bottom
+       the .lateral-overlay GEOMETRY SPEC above (Extra/top + Batería/bottom
        consolidated into one lateral node next to the ring). CA/USB paths
        are UNCHANGED. KEEP IN SYNC WITH App.tsx connector Svg (and
        vice-versa). -->
@@ -2178,22 +2194,22 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="cargas" id="cargas-wrap" style="display:none">
     <div class="title">Gestión de cargas</div>
     <div class="cargas-box" id="cargas-box"></div>
-    <div class="ecoplay-edit-row">
-      <a href="#" id="ecoplay-edit-link" class="ecoplay-edit-link">✏️ Editar % Ecoplay</a>
-    </div>
   </div>
 
   <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
-       Reusa el estilo dark de .eta-box/.cargas-box (mismo bg #141b22,
-       radios, colores de acento) en vez de inventar un lenguaje visual
-       nuevo. DOM/JS vanilla, sin framework, igual que el resto del
-       dashboard. -->
+       Solo alcanzable tocando el badge de Ecoplay en "Estado de carga"
+       cuando está "descargada" (ver renderCargaEstado) — el link
+       standalone "Editar % Ecoplay" que existía antes fue removido por
+       ser un trigger redundante. Reusa el estilo dark de .eta-box/
+       .cargas-box (mismo bg #141b22, radios, colores de acento) en vez de
+       inventar un lenguaje visual nuevo. DOM/JS vanilla, sin framework,
+       igual que el resto del dashboard. -->
   <div class="modal-backdrop" id="ecoplay-modal-backdrop">
     <div class="modal-box">
       <div class="modal-title">Ecoplay: % de batería propia</div>
       <input type="number" id="ecoplay-pct-input" class="modal-input" min="0" max="100" placeholder="0-100">
       <div class="modal-actions">
-        <button type="button" id="ecoplay-modal-submit" class="modal-btn modal-btn-primary">Calcular</button>
+        <button type="button" id="ecoplay-modal-submit" class="modal-btn modal-btn-primary">Aceptar</button>
         <button type="button" id="ecoplay-modal-close" class="modal-btn">Cerrar</button>
       </div>
       <div id="ecoplay-modal-result"></div>
@@ -2508,8 +2524,13 @@ DASHBOARD_HTML = """<!doctype html>
     }
 
     // Modal para editar el % de Ecoplay sin pasar por Telegram (POST
-    // /api/ecoplay). Mismo contrato/campos que devuelve _ecoplay_autonomy,
-    // más has_autonomy para distinguir el caso "sin autonomía todavía".
+    // /api/ecoplay). Simplificado: solo entra un % y toca "Aceptar" — el
+    // cálculo (hora segura / autonomía) YA NO se muestra acá, se ve
+    // reflejado en "Gestión de cargas" en el próximo refresh (loadCargas),
+    // evitando duplicar el mismo resultado en dos lugares de la pantalla.
+    // Único trigger: el badge de Ecoplay en "Estado de carga" (ver
+    // renderCargaEstado) — el link standalone que existía antes fue
+    // removido.
     function openEcoplayModal() {
       document.getElementById('ecoplay-modal-result').innerHTML = '';
       document.getElementById('ecoplay-pct-input').value = '';
@@ -2518,10 +2539,6 @@ DASHBOARD_HTML = """<!doctype html>
     function closeEcoplayModal() {
       document.getElementById('ecoplay-modal-backdrop').classList.remove('visible');
     }
-    document.getElementById('ecoplay-edit-link').addEventListener('click', (e) => {
-      e.preventDefault();
-      openEcoplayModal();
-    });
     document.getElementById('ecoplay-modal-close').addEventListener('click', closeEcoplayModal);
     document.getElementById('ecoplay-modal-backdrop').addEventListener('click', (e) => {
       if (e.target.id === 'ecoplay-modal-backdrop') closeEcoplayModal();
@@ -2544,9 +2561,6 @@ DASHBOARD_HTML = """<!doctype html>
           resultBox.innerHTML = `<div class="modal-result-error">${d.error || 'Error'}</div>`;
           return;
         }
-        resultBox.innerHTML = d.has_autonomy
-          ? `<div class="modal-result-ok">📡 Ecoplay al ${d.pct}%: podés pasarla a su batería propia a partir de las ~${d.safe_switch_text} para que aguante hasta las ${d.target_text}.</div>`
-          : `<div class="modal-result-warn">📡 Ecoplay al ${d.pct}%: no tiene autonomía como para pasarla ahora mismo y aguantar hasta las ${d.target_text} — no la cambies todavía.</div>`;
         // Informar un % siempre implica que Ecoplay quedó "cargada" (es la
         // fuente de verdad real del estado de carga), así que sincronizamos
         // el badge de "Estado de carga" acá también, no solo el % interno.
@@ -2558,7 +2572,7 @@ DASHBOARD_HTML = """<!doctype html>
         } catch (e2) { /* si falla, el próximo loadDevices() corrige la vista */ }
         loadCargas();
         loadDevices();
-        setTimeout(closeEcoplayModal, 900);
+        closeEcoplayModal();
       } catch (e) {
         resultBox.innerHTML = '<div class="modal-result-error">No se pudo conectar con el servidor.</div>';
       }
