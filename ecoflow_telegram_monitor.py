@@ -1912,7 +1912,7 @@ DASHBOARD_HTML = """<!doctype html>
      full GEOMETRY SPEC + fit-check arithmetic in the HTML comment above
      .ring-wrap below. */
   .lateral-overlay { position: absolute; left: 240px; top: 120px; width: 0; height: 0; }
-  .lateral-overlay .icon-item.lateral-icon { position: absolute; left: 34px; top: -24px; }
+  .lateral-overlay .icon-item.lateral-icon { position: absolute; left: 34px; top: -12px; }
   /* .lateral-overlay-left: exact x-mirror of .lateral-overlay above, for the
      Delta 2's own charge/discharge (as opposed to the extra/expansion
      battery on the right). Anchored at the ring's LEFT edge, same vertical
@@ -1923,7 +1923,7 @@ DASHBOARD_HTML = """<!doctype html>
      (mirror of the right side's left:34px..90px span: 34+56=90 far edge on
      the right becomes -90..-34 on the left, i.e. left:-90px, same width). */
   .lateral-overlay-left { position: absolute; left: 0px; top: 120px; width: 0; height: 0; }
-  .lateral-overlay-left .icon-item.lateral-icon { position: absolute; left: -90px; top: -24px; }
+  .lateral-overlay-left .icon-item.lateral-icon { position: absolute; left: -90px; top: -12px; }
   .flow-connectors.lateral { width: 64px; height: 10px; overflow: visible; display: block; }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt; stroke-width: 2.5;
