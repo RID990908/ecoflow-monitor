@@ -1711,7 +1711,6 @@ def get_dashboard_status() -> dict:
         "goal_floor": goal_floor,
         "goal_projected": goal_projected,
         "goal_met": goal_met,
-        "ecoplay": _ecoplay_autonomy(ECOPLAY_LAST_PCT, now) if ECOPLAY_LAST_PCT is not None else None,
     }
 
 
@@ -1897,11 +1896,6 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="cargas-box" id="cargas-box"></div>
   </div>
 
-  <div class="cargas" id="ecoplay-wrap" style="display:none">
-    <div class="title">📡 Ecoplay · batería propia</div>
-    <div class="cargas-box" id="ecoplay-box"></div>
-  </div>
-
   <div class="devices">
     <div class="title">Qué tenés encendido</div>
     <div id="devices"></div>
@@ -1989,22 +1983,6 @@ DASHBOARD_HTML = """<!doctype html>
           etaGoal.className = 'eta-goal ' + (d.goal_met ? 'eta-ok' : 'eta-warn');
         } else {
           etaGoal.textContent = '';
-        }
-
-        // Batería propia de la Ecoplay/WiFi: el % lo informa el usuario a
-        // mano por Telegram (/ecoplay <pct>), acá solo se muestra el último
-        // valor conocido con el cálculo recalculado en vivo (la hora
-        // objetivo es siempre "el próximo 7:30 AM" desde el momento en que
-        // se pide /api/status, no desde que se informó el %).
-        const ecoplayWrap = document.getElementById('ecoplay-wrap');
-        if (d.ecoplay) {
-          const e = d.ecoplay;
-          ecoplayWrap.style.display = '';
-          document.getElementById('ecoplay-box').textContent =
-            `Ecoplay al ${e.pct}%: podés poner la wifi en su batería propia a partir de las ` +
-            `~${e.safe_switch_text} para que aguante hasta las ${e.target_text}.`;
-        } else {
-          ecoplayWrap.style.display = 'none';
         }
 
         document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
