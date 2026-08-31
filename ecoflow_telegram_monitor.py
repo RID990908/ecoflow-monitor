@@ -2040,6 +2040,14 @@ DASHBOARD_HTML = """<!doctype html>
     function escapeHtml(s) {
       return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
+    // La meta y el "se va a cumplir" ya se muestran arriba en la caja de eta
+    // (junto con "dura hasta las X") — acá se recortan del texto de
+    // Gestión de cargas para no repetirlas dos veces en la misma pantalla.
+    // El bot de Telegram no se toca: sigue mandando el texto completo.
+    function stripMeta(msg) {
+      const idx = msg.indexOf('\n\n🎯 Meta:');
+      return idx === -1 ? msg : msg.slice(0, idx);
+    }
     async function loadCargas() {
       try {
         const res = await fetch('/api/cargas');
@@ -2048,7 +2056,7 @@ DASHBOARD_HTML = """<!doctype html>
         if (d.message) {
           wrap.style.display = 'block';
           document.getElementById('cargas-box').innerHTML =
-            escapeHtml(d.message).replace(/\\*(.+?)\\*/g, '<strong>$1</strong>');
+            escapeHtml(stripMeta(d.message)).replace(/\\*(.+?)\\*/g, '<strong>$1</strong>');
         } else {
           wrap.style.display = 'none';
         }
