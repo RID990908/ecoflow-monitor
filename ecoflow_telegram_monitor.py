@@ -718,6 +718,10 @@ def _gather_metrics(passive: bool = False) -> dict:
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
     system_net_w = delta2_net_w + (extra_net_w or 0)
     extra_in_w_nf = _nf(extra_in_w)
+    # extra_out_w: descarga bruta de la batería extra (bms_slave.outputWatts),
+    # separada de extra_in_w (carga) — alimenta el nodo "Extra" de arriba, que
+    # ahora SIEMPRE muestra descarga (no neto). Ver sdd/power-flow-bottom-nodes.
+    extra_out_w_nf = _nf(extra_out_w)
     ac_present = get_ac_present(data)
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
     source_verb, source_emoji = _charge_source(pv_w, ac_present, ac_w, system_net_w)
@@ -797,6 +801,7 @@ def _gather_metrics(passive: bool = False) -> dict:
         "ports": active_ports,
         "ac_out_w": ac_out_w,
         "extra_in_w": extra_in_w_nf,
+        "extra_out_w": extra_out_w_nf,
         "usb_out_w": usb_out_w,
     }
 
@@ -1719,6 +1724,7 @@ def get_dashboard_status() -> dict:
         "ports": m["ports"],
         "ac_out_w": m["ac_out_w"] or 0,
         "extra_in_w": m["extra_in_w"] or 0,
+        "extra_out_w": m["extra_out_w"] or 0,
         "usb_out_w": m["usb_out_w"] or 0,
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
         "stale": is_stale,
@@ -1777,9 +1783,19 @@ DASHBOARD_HTML = """<!doctype html>
   .batt-icon.batt-red { color: #f87171; }
   .batt-icon.batt-gray { color: #6b7684; }
   .ring-wrap { position: relative; width: 240px; height: 240px; margin: 6px 0 8px; }
+  .flow-top-wrap { position: relative; width: 300px; max-width: 100%; margin: 0 auto 4px; padding-bottom: 122px; }
   .flow-bottom-wrap { position: relative; width: 300px; max-width: 100%; margin: 4px auto 0; padding-top: 122px; }
-  .flow-connectors { position: absolute; top: 0; left: 0; width: 300px; height: 130px; pointer-events: none; }
+  .flow-connectors { position: absolute; left: 0; width: 300px; height: 130px; pointer-events: none; top: 0; }
+  .flow-connectors.top { top: auto; bottom: 0; }
+  .flow-overlay {
+    fill: none; stroke: #4ade80; stroke-width: 2; stroke-linecap: round;
+    stroke-dasharray: 6 10; opacity: 0; transition: opacity 200ms var(--ease-out);
+  }
+  .flow-overlay.active { opacity: 1; animation: flow-dash 1.1s linear infinite; }
+  @keyframes flow-dash { to { stroke-dashoffset: -16; } }
+  .icons-row.top { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
   .icons-row.bottom { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
+  .usb-port-icon { display: flex; align-items: center; justify-content: center; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
@@ -1868,24 +1884,40 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="io-col out"><div class="io-label" id="out-label">Salida <svg class="io-svg" viewBox="0 0 24 24" width="14" height="14"><path d="M12 21V11m0 0l-4 4m4-4l4 4M4 5h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="io-value" id="out-w">-- W</div></div>
   </div>
 
-  <div class="icons-row">
-    <div class="icon-item">
-      <div class="icon-circle" id="ac-circle">🔌</div>
-      <div class="icon-watts" id="ac-w">0 W</div>
-      <div class="icon-dir" id="ac-status"></div>
-      <div class="icon-name">AC</div>
+  <!-- GEOMETRY SPEC (top, mirrored): sdd/power-flow-bottom-nodes/design §4 —
+       viewBox 0 0 300 130, hub (150,122) at the ring's top edge, nodes
+       x=50/150/250 y=8 (bottom-center of each top node), path
+       M nx,8 Q 150,65 150,122 (y-mirror of the bottom spec: node/hub y
+       swapped, same quadratic form). KEEP IN SYNC WITH App.tsx top connector
+       Svg (and vice-versa). -->
+  <div class="flow-top-wrap">
+    <div class="icons-row top">
+      <div class="icon-item">
+        <div class="icon-circle" id="ac-circle">🔌</div>
+        <div class="icon-watts" id="ac-w">0 W</div>
+        <div class="icon-dir" id="ac-status"></div>
+        <div class="icon-name">AC</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-circle" id="extra-circle">🔋</div>
+        <div class="icon-watts" id="extra-w">0 W</div>
+        <div class="icon-dir" id="extra-dir"></div>
+        <div class="icon-name">Extra</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-circle" id="pv-circle">☀️</div>
+        <div class="icon-watts" id="pv-w">0 W</div>
+        <div class="icon-name">Solar</div>
+      </div>
     </div>
-    <div class="icon-item">
-      <div class="icon-circle" id="extra-circle">🔋</div>
-      <div class="icon-watts" id="extra-w">0 W</div>
-      <div class="icon-dir" id="extra-dir"></div>
-      <div class="icon-name">Extra</div>
-    </div>
-    <div class="icon-item">
-      <div class="icon-circle" id="pv-circle">☀️</div>
-      <div class="icon-watts" id="pv-w">0 W</div>
-      <div class="icon-name">Solar</div>
-    </div>
+    <svg class="flow-connectors top" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
+      <path d="M 50,8 Q 150,65 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-ac-top" class="flow-overlay" d="M 50,8 Q 150,65 150,122"/>
+      <path d="M 150,8 Q 150,65 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-extra-top" class="flow-overlay" d="M 150,8 Q 150,65 150,122"/>
+      <path d="M 250,8 Q 150,65 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-solar-top" class="flow-overlay" d="M 250,8 Q 150,65 150,122"/>
+    </svg>
   </div>
 
   <div class="ring-wrap">
@@ -1903,8 +1935,11 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="flow-bottom-wrap">
     <svg class="flow-connectors" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
       <path d="M 50,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-ac-out" class="flow-overlay" d="M 50,122 Q 150,65 150,8"/>
       <path d="M 150,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-extra-in" class="flow-overlay" d="M 150,122 Q 150,65 150,8"/>
       <path d="M 250,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-usb-out" class="flow-overlay" d="M 250,122 Q 150,65 150,8"/>
     </svg>
     <div class="icons-row bottom">
       <div class="icon-item">
@@ -1918,7 +1953,7 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="icon-name">Batería</div>
       </div>
       <div class="icon-item">
-        <div class="icon-circle">🔌</div>
+        <div class="icon-circle usb-port-icon"><svg viewBox="0 0 28 16" width="28" height="16"><rect x="2" y="3" width="20" height="10" rx="2" fill="none" stroke="#9aa4af" stroke-width="2"/><rect x="22" y="6.5" width="4" height="3" fill="#9aa4af"/></svg></div>
         <div class="icon-watts" id="usb-out-w">0 W</div>
         <div class="icon-name">USB</div>
       </div>
@@ -2047,20 +2082,40 @@ DASHBOARD_HTML = """<!doctype html>
 
         // Fila inferior (bottom row): CA / Batería / USB, misma fuente de
         // datos que /api/status, nunca null (siempre 0 como mínimo).
-        document.getElementById('ac-out-w').textContent = (d.ac_out_w || 0) + ' W';
-        document.getElementById('extra-in-w').textContent = (d.extra_in_w || 0) + ' W';
-        document.getElementById('usb-out-w').textContent = (d.usb_out_w || 0) + ' W';
+        const acOutW = d.ac_out_w || 0;
+        const extraInW = d.extra_in_w || 0;
+        const usbOutW = d.usb_out_w || 0;
+        document.getElementById('ac-out-w').textContent = acOutW + ' W';
+        document.getElementById('extra-in-w').textContent = extraInW + ' W';
+        document.getElementById('usb-out-w').textContent = usbOutW + ' W';
 
-        // Batería extra: mismo criterio que las filas de abajo (batteryFlow), sin duplicar la lógica
+        // Nodo "Extra" (arriba): a partir de este cambio SIEMPRE muestra
+        // descarga (extra_out_w), nunca neto — la carga de la batería extra
+        // se ve en la fila de abajo (Batería / extra_in_w). Rojo/"↓ descarga"
+        // cuando supera el piso de ruido, gris neutro y visible en 0W si no.
         const extraCircle = document.getElementById('extra-circle');
         const extraDir = document.getElementById('extra-dir');
-        const extraNet = d.extra_net_w;
-        const ef = batteryFlow(extraNet);
-        document.getElementById('extra-w').textContent = (extraNet == null ? '--' : Math.abs(extraNet)) + ' W';
-        extraCircle.innerHTML = batteryIcon(ef.state);
-        extraCircle.className = 'icon-circle ' + ef.cls;
-        extraDir.textContent = ef.state === 'charging' ? '↑ carga' : ef.state === 'discharging' ? '↓ descarga' : '';
-        extraDir.className = 'icon-dir ' + ef.cls;
+        const extraOutW = d.extra_out_w || 0;
+        const extraActive = extraOutW > 5;
+        document.getElementById('extra-w').textContent = extraOutW + ' W';
+        extraCircle.innerHTML = batteryIcon(extraActive ? 'discharging' : 'neutral');
+        extraCircle.className = 'icon-circle' + (extraActive ? ' discharging' : '');
+        extraDir.textContent = extraActive ? '↓ descarga' : '';
+        extraDir.className = 'icon-dir' + (extraActive ? ' discharging' : '');
+
+        // Overlay de flujo animado (líneas conectoras): solo se anima la
+        // línea del nodo cuyo wattage actual supera el piso de ruido (5W).
+        const acTopActive = (d.ac_w || 0) > 5;
+        const solarActive = (d.pv_w || 0) > 5;
+        const acOutActive = acOutW > 5;
+        const extraInActive = extraInW > 5;
+        const usbActive = usbOutW > 5;
+        document.getElementById('flow-ac-top').classList.toggle('active', acTopActive);
+        document.getElementById('flow-extra-top').classList.toggle('active', extraActive);
+        document.getElementById('flow-solar-top').classList.toggle('active', solarActive);
+        document.getElementById('flow-ac-out').classList.toggle('active', acOutActive);
+        document.getElementById('flow-extra-in').classList.toggle('active', extraInActive);
+        document.getElementById('flow-usb-out').classList.toggle('active', usbActive);
 
         function remainHtml(remain) {
           if (!remain) return '';
