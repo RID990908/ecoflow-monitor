@@ -625,6 +625,7 @@ def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
 ECOPLAY_BATTERY_WH = 484
 ECOPLAY_MIN_W = 35
 ECOPLAY_MAX_W = 45
+ECOPLAY_AVG_W = (ECOPLAY_MIN_W + ECOPLAY_MAX_W) / 2
 ECOPLAY_TARGET_HOUR = 7
 ECOPLAY_TARGET_MINUTE = 30
 
@@ -647,9 +648,11 @@ def _ecoplay_autonomy(pct: int, now=None) -> dict:
     now = now or datetime.now(TZ)
     wh_available = ECOPLAY_BATTERY_WH * pct / 100
     worst_hours = wh_available / ECOPLAY_MAX_W
+    avg_hours = wh_available / ECOPLAY_AVG_W
     best_hours = wh_available / ECOPLAY_MIN_W
     target = _next_ecoplay_target(now)
     worst_switch = target - timedelta(hours=worst_hours)
+    avg_switch = target - timedelta(hours=avg_hours)
     best_switch = target - timedelta(hours=best_hours)
 
     def _hm(hours):
@@ -660,9 +663,11 @@ def _ecoplay_autonomy(pct: int, now=None) -> dict:
         "pct": pct,
         "wh_available": round(wh_available),
         "worst_hours_text": _hm(worst_hours),
+        "avg_hours_text": _hm(avg_hours),
         "best_hours_text": _hm(best_hours),
         "target_text": target.strftime("%H:%M"),
         "worst_switch_text": worst_switch.strftime("%H:%M"),
+        "avg_switch_text": avg_switch.strftime("%H:%M"),
         "best_switch_text": best_switch.strftime("%H:%M"),
         "safe_switch_text": worst_switch.strftime("%H:%M"),
     }
@@ -673,9 +678,10 @@ def _format_ecoplay_message(info: dict) -> str:
         f"📡 Ecoplay al {info['pct']}% (~{info['wh_available']} Wh disponibles), "
         f"consumo 35-45 W:\n\n"
         f"• Peor caso (45 W): ~{info['worst_hours_text']} de autonomía\n"
+        f"• Promedio (40 W): ~{info['avg_hours_text']} de autonomía\n"
         f"• Mejor caso (35 W): ~{info['best_hours_text']} de autonomía\n\n"
-        f"Para que aguante hasta las {info['target_text']}, lo más seguro es no "
-        f"pasarla a la batería propia antes de las ~{info['safe_switch_text']}."
+        f"Podés poner la wifi en su batería propia a partir de las ~{info['safe_switch_text']} "
+        f"para que aguante hasta las {info['target_text']}."
     )
 
 
@@ -2006,8 +2012,9 @@ DASHBOARD_HTML = """<!doctype html>
           document.getElementById('ecoplay-box').textContent =
             `📡 Al ${e.pct}% (~${e.wh_available} Wh)\n` +
             `Peor caso (45 W): ~${e.worst_hours_text}\n` +
+            `Promedio (40 W): ~${e.avg_hours_text}\n` +
             `Mejor caso (35 W): ~${e.best_hours_text}\n\n` +
-            `Para llegar a las ${e.target_text}, no pasarla antes de las ~${e.safe_switch_text}.`;
+            `Podés poner la wifi en su batería propia a partir de las ~${e.safe_switch_text} para que aguante hasta las ${e.target_text}.`;
         } else {
           ecoplayWrap.style.display = 'none';
         }
