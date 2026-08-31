@@ -81,6 +81,11 @@ QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
 QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "7"))
 QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
 
+# Hora hasta la que debería aguantar la Ecoplay si se la deja prendida de
+# noche (ver /ecoplay). Se puede pisar por chat con /ecoplay HH:MM.
+ECOPLAY_TARGET_HOUR = int(os.environ.get("ECOPLAY_TARGET_HOUR", "7"))
+ECOPLAY_TARGET_MINUTE = int(os.environ.get("ECOPLAY_TARGET_MINUTE", "30"))
+
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
 # contraseña normales de la cuenta EcoFlow y habla por MQTT — el mismo canal
@@ -504,6 +509,7 @@ def set_bot_commands() -> None:
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
         {"command": "cargas", "description": "Qué encender/apagar ahora según el plan"},
+        {"command": "ecoplay", "description": "A qué hora prender el wifi para que aguante hasta las 7:30 AM"},
         {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
         {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off tv)"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
@@ -789,11 +795,62 @@ def build_report(m: dict = None) -> str:
     return _format_report(m)
 
 
+def _ecoplay_schedule_message(m: dict = None, target_hour: int = None, target_minute: int = None) -> str:
+    """A qué hora conviene prender la Ecoplay (120 W) para que, prendida sin
+    cortes desde ese momento, aguante hasta target_hour:target_minute (7:30
+    AM por default, /cargas ya dice que de madrugada es la única carga
+    real). Asume que mientras está apagada la batería no la sigue gastando
+    otra cosa y que no entra sol antes de esa hora — mismo criterio lineal
+    a watts constantes que el resto de las estimaciones del bot. Si con el
+    % actual ya alcanza aunque se prenda ahora mismo, lo dice con el
+    margen; si no, calcula la hora más tarde a la que hay que esperar para
+    que la batería le rinda justo hasta el objetivo."""
+    if m is None:
+        try:
+            m = _gather_metrics()
+        except Exception as exc:
+            log.exception("Error consultando la Delta 2")
+            return f"⚠️ Error al consultar la Delta 2: {exc}"
+    avg_soc = m.get("avg_soc")
+    if avg_soc is None:
+        return "⚠️ No hay dato de batería disponible ahora mismo."
+
+    th = ECOPLAY_TARGET_HOUR if target_hour is None else target_hour
+    tm = ECOPLAY_TARGET_MINUTE if target_minute is None else target_minute
+    num_batteries = 2 if m.get("soc_extra") is not None else 1
+    capacity_wh = BATTERY_CAPACITY_WH * num_batteries
+    watts = DEVICE_INFO["ecoplay"]["watts"]
+    hours_available = capacity_wh * (avg_soc / 100) / watts
+
+    now = datetime.now(TZ)
+    target = now.replace(hour=th, minute=tm, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    hours_needed = (target - now).total_seconds() / 3600
+
+    h_avail, min_avail = divmod(int(round(hours_available * 60)), 60)
+    target_str = target.strftime("%H:%M")
+    header = f"📡 *Ecoplay*: con {avg_soc:.1f}% de batería, prendida ahora aguanta *{h_avail}h {min_avail}m*."
+
+    if hours_available >= hours_needed:
+        margin_h, margin_m = divmod(int(round((hours_available - hours_needed) * 60)), 60)
+        return (
+            f"{header}\n\n"
+            f"✅ Ya la podés dejar prendida: llega hasta las {target_str} y te sobran {margin_h}h {margin_m}m."
+        )
+
+    on_time = target - timedelta(hours=hours_available)
+    return (
+        f"{header}\n\n"
+        f"🕒 Prendela recién a las *{on_time.strftime('%H:%M')}* para que te rinda justo hasta las {target_str}."
+    )
+
 
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
+    "/ecoplay [HH:MM] — a qué hora prenderla para que aguante hasta las 7:30 AM (o la hora que le pongas)\n"
     "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, tv, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
@@ -861,6 +918,18 @@ def handle_command(text: str, chat_id: str) -> None:
                 "apagada desde las 12 AM hasta el amanecer."
             )
         send_telegram(msg, chat_id=chat_id)
+    elif cmd == "/ecoplay":
+        target_hour = target_minute = None
+        if len(parts) >= 2 and ":" in parts[1]:
+            try:
+                hh, mm = parts[1].split(":")
+                target_hour, target_minute = int(hh), int(mm)
+            except ValueError:
+                send_telegram("Uso: /ecoplay [HH:MM] (ej: /ecoplay 06:00)", chat_id=chat_id)
+                return
+        send_telegram(
+            _ecoplay_schedule_message(target_hour=target_hour, target_minute=target_minute), chat_id=chat_id
+        )
     elif cmd in ("/on", "/off"):
         if len(parts) < 2:
             send_telegram(f"Uso: {cmd} <dispositivo> — {', '.join(DEVICE_INFO)}", chat_id=chat_id)
