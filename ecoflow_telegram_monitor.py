@@ -853,7 +853,6 @@ def build_report(m: dict = None) -> str:
     return _format_report(m)
 
 
-
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
