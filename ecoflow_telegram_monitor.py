@@ -1795,7 +1795,6 @@ DASHBOARD_HTML = """<!doctype html>
   @keyframes flow-dash { to { stroke-dashoffset: -16; } }
   .icons-row.top { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
   .icons-row.bottom { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
-  .usb-port-icon { display: flex; align-items: center; justify-content: center; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
@@ -1837,12 +1836,7 @@ DASHBOARD_HTML = """<!doctype html>
   .battery-row .val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .battery-row .val.charging { color: #4ade80; }
   .battery-row .val.discharging { color: #f87171; }
-  .ports { width: 100%; max-width: 380px; margin-top: 14px; }
-  .ports .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
-  .port-row { display: flex; justify-content: space-between; align-items: center; font-size: 14px; padding: 4px 4px; color: #cbd5e1; }
-  .port-row .port-name { display: flex; align-items: center; gap: 6px; }
   .usb-svg { flex-shrink: 0; color: #9aa4af; }
-  .port-row span:last-child { font-variant-numeric: tabular-nums; }
   .devices { width: 100%; max-width: 380px; margin-top: 14px; }
   .devices .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .device-btn {
@@ -1955,12 +1949,12 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="icon-name">CA</div>
       </div>
       <div class="icon-item">
-        <div class="icon-circle">🔋</div>
+        <div class="icon-circle" id="bateria-circle">🔋</div>
         <div class="icon-watts" id="extra-in-w">0 W</div>
         <div class="icon-name">Batería</div>
       </div>
       <div class="icon-item">
-        <div class="icon-circle usb-port-icon"><svg viewBox="0 0 28 16" width="28" height="16"><rect x="2" y="3" width="20" height="10" rx="2" fill="none" stroke="#9aa4af" stroke-width="2"/><rect x="22" y="6.5" width="4" height="3" fill="#9aa4af"/></svg></div>
+        <div class="icon-circle" id="usb-circle"><svg class="usb-svg" viewBox="0 0 24 12" width="18" height="9"><rect x="1" y="1" width="22" height="10" rx="5" fill="none" stroke="currentColor" stroke-width="2"/></svg></div>
         <div class="icon-watts" id="usb-out-w">0 W</div>
         <div class="icon-name">USB</div>
       </div>
@@ -1974,11 +1968,6 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 
   <div class="batteries" id="batteries"></div>
-
-  <div class="ports" id="ports-wrap" style="display:none">
-    <div class="title">Puertos activos</div>
-    <div id="ports"></div>
-  </div>
 
   <div class="cargas" id="cargas-wrap" style="display:none">
     <div class="title">Gestión de cargas</div>
@@ -2009,11 +1998,6 @@ DASHBOARD_HTML = """<!doctype html>
       const cls = state === 'charging' ? 'batt-green' : state === 'discharging' ? 'batt-red' : 'batt-gray';
       return `<span class="batt-icon ${cls}">${BATTERY_SVG}</span>`;
     }
-
-    // Ícono de puerto USB-C: forma ovalada típica del conector
-    const USB_SVG = `<svg class="usb-svg" viewBox="0 0 24 12" width="18" height="9">
-      <rect x="1" y="1" width="22" height="10" rx="5" fill="none" stroke="currentColor" stroke-width="2"/>
-    </svg>`;
 
     function batteryFlow(netW) {
       // mismo criterio que el informe de Telegram: neutral (gris) o carga (verde)/descarga (rojo)
@@ -2096,6 +2080,15 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('extra-in-w').textContent = extraInW + ' W';
         document.getElementById('usb-out-w').textContent = usbOutW + ' W';
 
+        // Nodo "Batería" (abajo): SIEMPRE representa carga entrante
+        // (extra_in_w), nunca descarga — la descarga se ve en la fila de
+        // arriba (Extra / extra_out_w). Mismo ícono/colores que el propio
+        // estado de batería de la Delta2 (batteryIcon), reutilizado acá.
+        const bateriaCircle = document.getElementById('bateria-circle');
+        const extraInActive = extraInW > 5;
+        bateriaCircle.innerHTML = batteryIcon(extraInActive ? 'charging' : 'neutral');
+        bateriaCircle.className = 'icon-circle' + (extraInActive ? ' charging' : '');
+
         // Nodo "Extra" (arriba): a partir de este cambio SIEMPRE muestra
         // descarga (extra_out_w), nunca neto — la carga de la batería extra
         // se ve en la fila de abajo (Batería / extra_in_w). Rojo/"↓ descarga"
@@ -2115,7 +2108,6 @@ DASHBOARD_HTML = """<!doctype html>
         const acTopActive = (d.ac_w || 0) > 5;
         const solarActive = (d.pv_w || 0) > 5;
         const acOutActive = acOutW > 5;
-        const extraInActive = extraInW > 5;
         const usbActive = usbOutW > 5;
         document.getElementById('flow-ac-top').classList.toggle('active', acTopActive);
         document.getElementById('flow-extra-top').classList.toggle('active', extraActive);
@@ -2140,16 +2132,6 @@ DASHBOARD_HTML = """<!doctype html>
           batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Batería Extra<div class="sub">${f.label}${remainHtml(d.extra_remain)}</div></div></div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
         }
         document.getElementById('batteries').innerHTML = batHtml;
-
-        const portsWrap = document.getElementById('ports-wrap');
-        if (d.ports && d.ports.length) {
-          portsWrap.style.display = 'block';
-          document.getElementById('ports').innerHTML = d.ports.map(
-            p => `<div class="port-row"><span class="port-name">${USB_SVG}${p.name}</span><span>${p.watts} W</span></div>`
-          ).join('');
-        } else {
-          portsWrap.style.display = 'none';
-        }
 
         // El fetch HTTP respondió, pero eso solo dice que el servidor está
         // vivo — no que la telemetría MQTT de la Delta 2 sea fresca. d.stale
