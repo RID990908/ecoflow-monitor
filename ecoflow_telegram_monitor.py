@@ -719,14 +719,12 @@ def _gather_metrics(passive: bool = False) -> dict:
 
     # bms_bmsStatus.inputWatts/outputWatts (campo directo de la Delta 2) está
     # confirmado roto (pegado en 0); se deriva el neto de la contabilidad
-    # general del sistema en su lugar. Para la batería extra sí hay un campo
-    # de entrada confiable (bms_slave.inputWatts).
+    # general del sistema en su lugar. Para la batería extra, en cambio,
+    # bms_slave.inputWatts/outputWatts SÍ son confiables — verificado en vivo
+    # contra logs de producción (carga: inputWatts>0/outputWatts=0; descarga:
+    # inputWatts=0/outputWatts>0, nunca los dos activos a la vez).
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
-    log.info(
-        "[DEBUG-EXTRA-VERIFY] bms_slave.inputWatts=%r bms_slave.outputWatts=%r extra_net_w=%r",
-        extra_in_w, extra_out_w, extra_net_w,
-    )
     system_net_w = delta2_net_w + (extra_net_w or 0)
     extra_in_w_nf = _nf(extra_in_w)
     # extra_out_w: descarga bruta de la batería extra (bms_slave.outputWatts),
