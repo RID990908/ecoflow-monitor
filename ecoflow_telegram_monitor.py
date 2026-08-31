@@ -2075,10 +2075,10 @@ DASHBOARD_HTML = """<!doctype html>
     refresh();
     loadDevices();
     loadCargas();
-    setInterval(refresh, 1000);
+    setInterval(refresh, 2000);
     setInterval(tickClock, 1000);
-    setInterval(loadDevices, 1000);
-    setInterval(loadCargas, 1000);
+    setInterval(loadDevices, 2000);
+    setInterval(loadCargas, 2000);
   </script>
 </body>
 </html>
