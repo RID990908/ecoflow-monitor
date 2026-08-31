@@ -2049,6 +2049,7 @@ DASHBOARD_HTML = """<!doctype html>
      mobile-tuned values untouched at every width; only NEW rules are
      added here, scoped inside the media query, purely additive. */
   .dashboard-grid { display: contents; }
+  .side-col-left, .side-col-right { display: contents; }
   @media (min-width: 768px) {
     .dashboard-grid {
       display: grid;
@@ -2075,21 +2076,21 @@ DASHBOARD_HTML = """<!doctype html>
        (.devices-panel-right) go right since they're the "what's plugged
        in / actionable controls" pair. Content/IDs/JS wiring untouched —
        only grid-column placement changes at this breakpoint. */
-    .batteries, .cargas {
-      grid-column: 1;
-    }
-    #carga-estado-wrap, .devices-panel-right {
-      grid-column: 3;
-    }
-    /* Grid auto-placement is row-major in DOM order — by the time it
-       reaches .batteries/#carga-estado-wrap (which come after several
-       center-column elements in the HTML), it has already advanced past
-       row 1, pushing the side panels down instead of starting level with
-       the ring. Pin the FIRST item of each side column to row 1 explicitly
-       so both columns start together; the second item in each column
-       (.cargas / .devices-panel-right) auto-flows to row 2 normally. */
-    .batteries, #carga-estado-wrap {
-      grid-row: 1;
+    /* .side-col-left/.side-col-right wrapper divs stay display:contents
+       even here (do NOT become grid items) — a wrapping single item that
+       covers a whole side's content forces that entire content's height
+       into ONE grid row, which is what pushed the center diagram down
+       last round. Assign grid placement to the INNER items individually
+       instead, so their height gets distributed across the SAME rows the
+       center column's own elements naturally use (row 1 = io-row-sized,
+       row 2 = flow-top-wrap-sized, etc.) — no row is forced taller than
+       the center column actually needs. */
+    .batteries, #carga-estado-wrap { grid-row: 1; }
+    .cargas, .devices-panel-right { grid-row: 2; }
+    .batteries, .cargas { grid-column: 1; }
+    #carga-estado-wrap, .devices-panel-right { grid-column: 3; }
+    .batteries, .cargas, #carga-estado-wrap, .devices-panel-right {
+      margin-top: 0;
     }
     /* The center column is inherently much taller than the two side
        panels (Gestión de cargas / Estado de carga), leaving a large dead
@@ -2107,9 +2108,12 @@ DASHBOARD_HTML = """<!doctype html>
     .pct { font-size: 38px; }
     .pct-sub { font-size: 11px; }
     .pct-sub .dur { font-size: 18px; }
-    .icons-row { margin-bottom: 8px; }
-    .eta-box { margin-top: 2px; padding: 10px 18px; }
+    .io-row { margin-bottom: 2px; }
+    .icons-row { margin-bottom: 2px; }
+    .eta-box { margin-top: 0; padding: 10px 18px; }
     .batteries, .devices, .cargas { margin-top: 6px; }
+    .side-col-left, .side-col-right { gap: 4px; }
+    .updated { margin-top: 2px; }
     .battery-row { margin-top: 5px; padding: 9px 14px; }
     .updated { margin-top: 8px; }
   }
@@ -2351,12 +2355,14 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="eta-goal" id="eta-goal"></div>
   </div>
 
+  <div class="side-col-left">
   <div class="batteries" id="batteries"></div>
 
   <div class="cargas" id="cargas-wrap" style="display:none">
     <div class="title">Gestión de cargas</div>
     <div class="cargas-box" id="cargas-box"></div>
   </div>
+  </div><!-- /.side-col-left -->
 
   <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
        Solo alcanzable tocando el badge de Ecoplay en "Estado de carga"
@@ -2378,6 +2384,7 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="side-col-right">
   <div class="devices" id="carga-estado-wrap" style="display:none">
     <div class="title">Estado de carga</div>
     <div id="carga-estado"></div>
@@ -2387,6 +2394,7 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="title">Qué tenés encendido</div>
     <div id="devices"></div>
   </div>
+  </div><!-- /.side-col-right -->
 
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
