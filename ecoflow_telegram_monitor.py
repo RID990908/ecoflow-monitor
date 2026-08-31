@@ -1791,6 +1791,7 @@ DASHBOARD_HTML = """<!doctype html>
     fill: none; stroke: #4ade80; stroke-width: 2; stroke-linecap: round;
     stroke-dasharray: 6 10; opacity: 0; transition: opacity 200ms var(--ease-out);
   }
+  #flow-ac-out.flow-overlay, #flow-extra-in.flow-overlay, #flow-usb-out.flow-overlay { stroke: #f87171; }
   .flow-overlay.active { opacity: 1; animation: flow-dash 1.1s linear infinite; }
   @keyframes flow-dash { to { stroke-dashoffset: -16; } }
   .icons-row.top { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
