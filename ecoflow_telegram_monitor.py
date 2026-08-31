@@ -2081,6 +2081,16 @@ DASHBOARD_HTML = """<!doctype html>
     #carga-estado-wrap, .devices-panel-right {
       grid-column: 3;
     }
+    /* Grid auto-placement is row-major in DOM order — by the time it
+       reaches .batteries/#carga-estado-wrap (which come after several
+       center-column elements in the HTML), it has already advanced past
+       row 1, pushing the side panels down instead of starting level with
+       the ring. Pin the FIRST item of each side column to row 1 explicitly
+       so both columns start together; the second item in each column
+       (.cargas / .devices-panel-right) auto-flows to row 2 normally. */
+    .batteries, #carga-estado-wrap {
+      grid-row: 1;
+    }
   }
 </style>
 </head>
@@ -2367,7 +2377,7 @@ DASHBOARD_HTML = """<!doctype html>
     // Ícono de batería en SVG (verde=carga, roja=descarga, gris=estable/sin datos).
     // Un solo shape, coloreado con currentColor según la clase, en vez de 3
     // archivos separados — mismo resultado visual, menos código repetido.
-    const BATTERY_SVG = `<svg viewBox="0 0 28 16" width="26" height="15">
+    const BATTERY_SVG = `<svg viewBox="0 0 28 16" width="26" height="15" style="display:block">
       <rect x="1" y="1" width="23" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
       <rect x="25" y="5.5" width="2.5" height="5" rx="1" fill="currentColor"/>
       <rect x="3.5" y="3.5" width="18" height="9" rx="1.5" fill="currentColor"/>
