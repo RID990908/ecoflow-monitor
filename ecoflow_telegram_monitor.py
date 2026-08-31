@@ -1511,7 +1511,7 @@ def build_load_advisor_message(m: dict = None) -> str:
         vent_line, _ = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0)
         pb_line, _ = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0)
         lines = [
-            f"🔆 *Gestión de cargas* · {block['label']}",
+            f"🔆 *Horario:* {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo",
             _status_line("🥶", "Nevera", False, ["nevera"]),
             _status_line("💻", "Laptop", False, ["laptop"]),
@@ -1561,7 +1561,7 @@ def build_load_advisor_message(m: dict = None) -> str:
             ecoplay_line, available = _allocate_ecoplay(available)
 
         lines = [
-            f"🔆 *Gestión de cargas* · {block['label']}",
+            f"🔆 *Horario:* {block['label']}",
             _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
             laptop_line,
             vent_line,
@@ -2484,14 +2484,17 @@ DASHBOARD_HTML = """<!doctype html>
           return ` · <span style="color:${color};font-weight:600">${remain.text}</span>`;
         }
 
+        // Sin "Carga"/"Descarga" ni W en la tarjeta: ese estado ya lo dice
+        // el color del ícono del gancho al lado del anillo, y el W de
+        // entrada/salida ya está ahí también — acá solo % y tiempo restante.
         let batHtml = '';
         if (d.soc_delta2 != null) {
           const f = batteryFlow(d.delta2_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Delta 2<div class="sub">${f.label}${remainHtml(d.delta2_remain)}</div></div></div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Delta 2<div class="sub">${remainHtml(d.delta2_remain).replace(/^ · /, '')}</div></div></div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%</div></div>`;
         }
         if (d.soc_extra != null) {
           const f = batteryFlow(d.extra_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Batería Extra<div class="sub">${f.label}${remainHtml(d.extra_remain)}</div></div></div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%${f.suffix}</div></div>`;
+          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Batería Extra<div class="sub">${remainHtml(d.extra_remain).replace(/^ · /, '')}</div></div></div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%</div></div>`;
         }
         document.getElementById('batteries').innerHTML = batHtml;
 
