@@ -670,10 +670,7 @@ def _ecoplay_cargas_suffix(now=None) -> str:
     if ECOPLAY_LAST_PCT is None:
         return ""
     info = _ecoplay_autonomy(ECOPLAY_LAST_PCT, now)
-    return (
-        f" · 🔋 batería propia al {info['pct']}%: pasarla desde las ~{info['safe_switch_text']} "
-        f"(aguanta hasta las {info['target_text']})"
-    )
+    return f" · 🔋 {info['pct']}%: {info['safe_switch_text']} (Meta: {info['target_text']})"
 
 
 def _format_elapsed(seconds: float) -> str:
