@@ -716,6 +716,10 @@ def _gather_metrics(passive: bool = False) -> dict:
     # de entrada confiable (bms_slave.inputWatts).
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
+    log.info(
+        "[DEBUG-EXTRA-VERIFY] bms_slave.inputWatts=%r bms_slave.outputWatts=%r extra_net_w=%r",
+        extra_in_w, extra_out_w, extra_net_w,
+    )
     system_net_w = delta2_net_w + (extra_net_w or 0)
     extra_in_w_nf = _nf(extra_in_w)
     # extra_out_w: descarga bruta de la batería extra (bms_slave.outputWatts),
