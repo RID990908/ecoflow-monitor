@@ -2052,11 +2052,11 @@ DASHBOARD_HTML = """<!doctype html>
   @media (min-width: 768px) {
     .dashboard-grid {
       display: grid;
-      grid-template-columns: minmax(180px, 1fr) minmax(420px, 460px) minmax(180px, 1fr);
+      grid-template-columns: minmax(180px, 280px) minmax(420px, 460px) minmax(180px, 280px);
       column-gap: 28px;
       align-items: start;
       justify-items: center;
-      max-width: 1200px;
+      justify-content: center;
       width: 100%;
       margin: 0 auto;
     }
