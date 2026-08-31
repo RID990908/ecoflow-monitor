@@ -1929,19 +1929,25 @@ DASHBOARD_HTML = """<!doctype html>
 
   <!-- GEOMETRY SPEC (manifold/elbow style): sdd/power-flow-bottom-nodes/design §4 —
        viewBox 0 0 300 130, hub (150,8), nodes x=50/150/250 y=122. Each side
-       node rises straight up to a shared horizontal bus at y=65 (rounded
-       10px corners), then a single shared vertical trunk continues from the
-       bus center (150,65) up to the hub. Center node is a straight vertical
+       node connects to a shared horizontal bus at y=65 (rounded 10px
+       corners), then a single shared vertical trunk continues from the
+       bus center (150,65) to the hub. Center node is a straight vertical
        line (already aligned with hub x).
+       DIRECTION: top-row paths (Entrada/input, see svg above) are defined
+       node -> hub (source feeds the ring). Bottom-row paths below are
+       defined hub -> node (the ring feeds the device) — opposite winding
+       direction of the top row, same visual geometry, so the flow-dash
+       animation reads correctly for each direction. Do not "normalize"
+       bottom-row d start/end to match top row without re-checking this.
        KEEP IN SYNC WITH App.tsx connector Svg (and vice-versa). -->
   <div class="flow-bottom-wrap">
     <svg class="flow-connectors" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
-      <path d="M 50,122 L 50,75 Q 50,65 60,65 L 140,65 Q 150,65 150,55 L 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-ac-out" class="flow-overlay" d="M 50,122 L 50,75 Q 50,65 60,65 L 140,65 Q 150,65 150,55 L 150,8"/>
-      <path d="M 150,122 L 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-extra-in" class="flow-overlay" d="M 150,122 L 150,8"/>
-      <path d="M 250,122 L 250,75 Q 250,65 240,65 L 160,65 Q 150,65 150,55 L 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
-      <path id="flow-usb-out" class="flow-overlay" d="M 250,122 L 250,75 Q 250,65 240,65 L 160,65 Q 150,65 150,55 L 150,8"/>
+      <path d="M 150,8 L 150,55 Q 150,65 140,65 L 60,65 Q 50,65 50,75 L 50,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-ac-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 140,65 L 60,65 Q 50,65 50,75 L 50,122"/>
+      <path d="M 150,8 L 150,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-extra-in" class="flow-overlay" d="M 150,8 L 150,122"/>
+      <path d="M 150,8 L 150,55 Q 150,65 160,65 L 240,65 Q 250,65 250,75 L 250,122" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path id="flow-usb-out" class="flow-overlay" d="M 150,8 L 150,55 Q 150,65 160,65 L 240,65 Q 250,65 250,75 L 250,122"/>
     </svg>
     <div class="icons-row bottom">
       <div class="icon-item">
