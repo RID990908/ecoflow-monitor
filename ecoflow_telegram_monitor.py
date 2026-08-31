@@ -771,11 +771,6 @@ def _gather_metrics(passive: bool = False) -> dict:
     active_ports = [{"name": name, "watts": w} for name, w in ports if w and w > NOISE_FLOOR_W]
 
     ac_out_w = _nf(ac_out_w_raw)
-    log.info(
-        "[DEBUG-R1-VERIFY] inv.outputWatts(raw)=%s vs out_w(pd.wattsOutSum/fallback)=%s",
-        ac_out_w_raw,
-        out_w,
-    )
     usb_out_w = _nf(
         (_pick(data, "pd.typec1Watts") or 0)
         + (_pick(data, "pd.typec2Watts") or 0)
