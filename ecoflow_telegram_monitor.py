@@ -1707,16 +1707,12 @@ DASHBOARD_HTML = """<!doctype html>
   .eta-main.eta-warn { color: #f87171; }
   .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; justify-content: center; }
   .eta-box .eta-sub .batt-icon { width: 14px; }
-  .goal-box {
-    margin-top: 8px; padding: 10px 22px; border-radius: 16px; background: #141b22;
-    text-align: center; max-width: 340px; width: 100%;
-    opacity: 0; transform: scale(0.97); visibility: hidden;
-    transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), visibility 200ms;
+  .eta-box .eta-goal {
+    font-size: 13px; font-weight: 700; margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid #232c36; font-variant-numeric: tabular-nums;
   }
-  .goal-box.visible { opacity: 1; transform: scale(1); visibility: visible; }
-  .goal-box .goal-main { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .goal-main.eta-ok { color: #4ade80; }
-  .goal-main.eta-warn { color: #f87171; }
+  .eta-goal.eta-ok { color: #4ade80; }
+  .eta-goal.eta-warn { color: #f87171; }
   .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
   .battery-row {
     display: flex; justify-content: space-between; align-items: center;
@@ -1806,10 +1802,7 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="eta-box" id="eta-box">
     <div class="eta-main" id="eta-main"></div>
     <div class="eta-sub" id="eta-sub"></div>
-  </div>
-
-  <div class="goal-box" id="goal-box">
-    <div class="goal-main" id="goal-main"></div>
+    <div class="eta-goal" id="eta-goal"></div>
   </div>
 
   <div class="batteries" id="batteries"></div>
@@ -1885,6 +1878,7 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('dur').textContent = d.remain_duration || '--';
 
         const etaBox = document.getElementById('eta-box');
+        const etaGoal = document.getElementById('eta-goal');
         if (d.eta_text) {
           etaBox.classList.add('visible');
           const etaMain = document.getElementById('eta-main');
@@ -1896,21 +1890,20 @@ DASHBOARD_HTML = """<!doctype html>
           } else {
             etaSub.textContent = d.last_ac_text || '';
           }
-        } else {
+        } else if (!d.goal_label) {
           etaBox.classList.remove('visible');
         }
 
         // Meta/checkpoint del próximo horario del plan — misma proyección
-        // que ya usa /cargas (_project_to_checkpoint), acá solo se muestra.
-        const goalBox = document.getElementById('goal-box');
+        // que ya usa /cargas (_project_to_checkpoint), integrada dentro de
+        // la misma caja de eta en vez de una caja aparte.
         if (d.goal_label) {
-          goalBox.classList.add('visible');
-          const goalMain = document.getElementById('goal-main');
+          etaBox.classList.add('visible');
           const icon = d.goal_met ? '✅' : '⚠️';
-          goalMain.textContent = `${icon} Meta: ${d.goal_floor}% para ${d.goal_label} (proyectás ${d.goal_projected.toFixed(0)}%)`;
-          goalMain.className = 'goal-main ' + (d.goal_met ? 'eta-ok' : 'eta-warn');
+          etaGoal.textContent = `${icon} Meta: ${d.goal_floor}% para ${d.goal_label} (proyectás ${d.goal_projected.toFixed(0)}%)`;
+          etaGoal.className = 'eta-goal ' + (d.goal_met ? 'eta-ok' : 'eta-warn');
         } else {
-          goalBox.classList.remove('visible');
+          etaGoal.textContent = '';
         }
 
         document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
