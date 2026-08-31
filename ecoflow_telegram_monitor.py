@@ -67,7 +67,7 @@ SN_EXTRA = os.environ.get("ECOFLOW_SN_EXTRA", "").strip()
 BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
 AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "1"))
-AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"
+AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC" (mismo valor que NOISE_FLOOR_W mas abajo, no consolidado: este mide solo el puerto AC de entrada, NOISE_FLOOR_W se usa para flujos de potencia en general)
 
 # Railway corre en UTC; esto es solo para mostrar horas locales (hora estimada
 # de autonomía, bloques del plan de cargas). zoneinfo maneja el horario de
@@ -341,6 +341,7 @@ def _on_mqtt_message(client, userdata, msg):
     try:
         raw = json.loads(msg.payload.decode("utf-8", errors="ignore"))
     except Exception:
+        log.warning("Payload MQTT invalido en %s, descartado: %.200s", msg.topic, msg.payload)
         return
     for sn in (SN_DELTA2, SN_EXTRA):
         if not sn:
@@ -462,7 +463,7 @@ def get_ac_watts(data: dict):
     return _pick(data, "inv.inputWatts")
 
 
-NOISE_FLOOR_W = 5  # por debajo de esto es ruido de medición, no transferencia real
+NOISE_FLOOR_W = 5  # por debajo de esto es ruido de medición, no transferencia real (ver AC_WATTS_THRESHOLD arriba, mismo valor pero para el puerto AC especificamente)
 AC_VOLTAGE_THRESHOLD_MV = 50000  # ~50V; AC real ronda 110000-240000 mV, esto solo filtra ausencia/ruido
 
 
@@ -1262,7 +1263,6 @@ def ac_check_timer() -> None:
                 if is_full and not WAS_FULL:
                     send_telegram(f"🔋 La Delta 2 terminó de cargar ({soc:.1f}%).")
                     log.info("Notificada carga completa (%.1f%%)", soc)
-                if is_full and not WAS_FULL:
                     WAS_FULL = True
                     state_changed = True
                 elif not is_full and soc < FULL_CHARGE_RESET_THRESHOLD and WAS_FULL:
@@ -2332,6 +2332,15 @@ DASHBOARD_HTML = """<!doctype html>
     <span id="mqtt-stale-text"></span>
   </div>
   <script>
+    // Mismo umbral que NOISE_FLOOR_W del lado Python (ecoflow_telegram_monitor.py):
+    // por debajo de esto se considera ruido de medición, no transferencia real.
+    const NOISE_FLOOR_W = 5;
+    // Umbrales de color del ring principal (rojo/amarillo/verde). Mismos
+    // valores que RING_RED_MAX_PCT/RING_YELLOW_MAX_PCT en App.tsx (Expo) —
+    // si cambian acá, cambiarlos ahí también para que no queden desincronizados.
+    const RING_RED_MAX_PCT = 10;
+    const RING_YELLOW_MAX_PCT = 20;
+
     // Ícono de batería en SVG (verde=carga, roja=descarga, gris=estable/sin datos).
     // Un solo shape, coloreado con currentColor según la clase, en vez de 3
     // archivos separados — mismo resultado visual, menos código repetido.
@@ -2348,8 +2357,8 @@ DASHBOARD_HTML = """<!doctype html>
 
     function batteryFlow(netW) {
       // mismo criterio que el informe de Telegram: neutral (gris) o carga (verde)/descarga (rojo)
-      if (netW == null || (netW > -5 && netW < 5)) return { state: 'neutral', label: 'Carga', suffix: '', cls: '' };
-      if (netW > 5) return { state: 'charging', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
+      if (netW == null || (netW > -NOISE_FLOOR_W && netW < NOISE_FLOOR_W)) return { state: 'neutral', label: 'Carga', suffix: '', cls: '' };
+      if (netW > NOISE_FLOOR_W) return { state: 'charging', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
       return { state: 'discharging', label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
     }
 
@@ -2372,7 +2381,7 @@ DASHBOARD_HTML = """<!doctype html>
         const pct = d.percent != null ? d.percent : 0;
         const ring = document.getElementById('ring');
         ring.style.setProperty('--pct', pct);
-        ring.style.setProperty('--ring-color', pct <= 10 ? '#ef4444' : pct <= 20 ? '#eab308' : '#22c55e');
+        ring.style.setProperty('--ring-color', pct <= RING_RED_MAX_PCT ? '#ef4444' : pct <= RING_YELLOW_MAX_PCT ? '#eab308' : '#22c55e');
         document.getElementById('pct').textContent = (d.percent != null ? d.percent.toFixed(1) : '--') + '%';
         document.getElementById('dur').textContent = d.remain_duration || '--';
 
@@ -2414,7 +2423,7 @@ DASHBOARD_HTML = """<!doctype html>
         acStatus.textContent = d.has_ac ? 'Sí' : 'No';
         acStatus.className = 'icon-dir' + (d.has_ac ? ' charging' : '');
         document.getElementById('pv-w').textContent = (d.pv_w ?? '--') + ' W';
-        document.getElementById('pv-circle').className = 'icon-circle' + (d.pv_w > 5 ? ' charging' : '');
+        document.getElementById('pv-circle').className = 'icon-circle' + (d.pv_w > NOISE_FLOOR_W ? ' charging' : '');
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
 
@@ -2439,8 +2448,8 @@ DASHBOARD_HTML = """<!doctype html>
         const lateralCircle = document.getElementById('lateral-circle');
         const lateralOutW = d.extra_out_w || 0;
         const lateralInW = extraInW;
-        const lateralDischarging = lateralOutW > 5;
-        const lateralCharging = !lateralDischarging && lateralInW > 5;
+        const lateralDischarging = lateralOutW > NOISE_FLOOR_W;
+        const lateralCharging = !lateralDischarging && lateralInW > NOISE_FLOOR_W;
         const lateralW = lateralDischarging ? lateralOutW : lateralInW;
         const lateralState = lateralDischarging ? 'discharging' : lateralCharging ? 'charging' : 'neutral';
         document.getElementById('lateral-w').textContent = lateralW + ' W';
@@ -2457,8 +2466,8 @@ DASHBOARD_HTML = """<!doctype html>
         const delta2Circle = document.getElementById('delta2-circle');
         const delta2OutW = d.delta2_discharge_w || 0;
         const delta2InW = d.delta2_charge_w || 0;
-        const delta2Discharging = delta2OutW > 5;
-        const delta2Charging = !delta2Discharging && delta2InW > 5;
+        const delta2Discharging = delta2OutW > NOISE_FLOOR_W;
+        const delta2Charging = !delta2Discharging && delta2InW > NOISE_FLOOR_W;
         const delta2W = delta2Discharging ? delta2OutW : delta2InW;
         const delta2State = delta2Discharging ? 'discharging' : delta2Charging ? 'charging' : 'neutral';
         document.getElementById('delta2-w').textContent = delta2W + ' W';
@@ -2468,11 +2477,11 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('flow-delta2-discharge').classList.toggle('active', delta2Discharging);
 
         // Overlay de flujo animado (líneas conectoras): solo se anima la
-        // línea del nodo cuyo wattage actual supera el piso de ruido (5W).
-        const acTopActive = (d.ac_w || 0) > 5;
-        const solarActive = (d.pv_w || 0) > 5;
-        const acOutActive = acOutW > 5;
-        const usbActive = usbOutW > 5;
+        // línea del nodo cuyo wattage actual supera el piso de ruido.
+        const acTopActive = (d.ac_w || 0) > NOISE_FLOOR_W;
+        const solarActive = (d.pv_w || 0) > NOISE_FLOOR_W;
+        const acOutActive = acOutW > NOISE_FLOOR_W;
+        const usbActive = usbOutW > NOISE_FLOOR_W;
         document.getElementById('flow-ac-top').classList.toggle('active', acTopActive);
         document.getElementById('flow-solar-top').classList.toggle('active', solarActive);
         document.getElementById('flow-ac-out').classList.toggle('active', acOutActive);
