@@ -516,6 +516,13 @@ def set_bot_commands() -> None:
 
 
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "").strip()
+# Telegram cachea el Mini App por URL exacta del lado del cliente — el
+# Cache-Control: no-store del propio server no alcanza, porque a veces ni
+# siquiera vuelve a pedir el documento. Se le pega un query param que cambia
+# en cada arranque del proceso (o sea, en cada deploy), así Telegram ve una
+# URL nueva y se ve obligado a pedir el documento de nuevo en vez de reusar
+# la versión vieja que tenía en su WebView.
+_DASHBOARD_CACHE_BUST = str(int(time.time()))
 
 
 def set_dashboard_menu_button() -> None:
@@ -524,9 +531,11 @@ def set_dashboard_menu_button() -> None:
     navegador aparte."""
     if not DASHBOARD_URL:
         return
+    sep = "&" if "?" in DASHBOARD_URL else "?"
+    url = f"{DASHBOARD_URL}{sep}v={_DASHBOARD_CACHE_BUST}"
     resp = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/setChatMenuButton",
-        json={"menu_button": {"type": "web_app", "text": "📊 Panel", "web_app": {"url": DASHBOARD_URL}}},
+        json={"menu_button": {"type": "web_app", "text": "📊 Panel", "web_app": {"url": url}}},
         timeout=30,
     )
     resp.raise_for_status()
