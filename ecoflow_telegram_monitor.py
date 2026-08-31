@@ -1777,6 +1777,9 @@ DASHBOARD_HTML = """<!doctype html>
   .batt-icon.batt-red { color: #f87171; }
   .batt-icon.batt-gray { color: #6b7684; }
   .ring-wrap { position: relative; width: 240px; height: 240px; margin: 6px 0 8px; }
+  .flow-bottom-wrap { position: relative; width: 300px; max-width: 100%; margin: 4px auto 0; padding-top: 122px; }
+  .flow-connectors { position: absolute; top: 0; left: 0; width: 300px; height: 130px; pointer-events: none; }
+  .icons-row.bottom { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
@@ -1890,6 +1893,34 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="ring-inner">
         <div class="pct" id="pct">--%</div>
         <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GEOMETRY SPEC: sdd/power-flow-bottom-nodes/design §4 — viewBox 0 0 300 130,
+       hub (150,8), nodes x=50/150/250 y=122, path M nx,ny Q 150,65 150,8.
+       KEEP IN SYNC WITH App.tsx connector Svg (and vice-versa). -->
+  <div class="flow-bottom-wrap">
+    <svg class="flow-connectors" viewBox="0 0 300 130" preserveAspectRatio="none" width="300" height="130">
+      <path d="M 50,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path d="M 150,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+      <path d="M 250,122 Q 150,65 150,8" fill="none" stroke="#232c36" stroke-width="2"/>
+    </svg>
+    <div class="icons-row bottom">
+      <div class="icon-item">
+        <div class="icon-circle">🔌</div>
+        <div class="icon-watts" id="ac-out-w">0 W</div>
+        <div class="icon-name">CA</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-circle">🔋</div>
+        <div class="icon-watts" id="extra-in-w">0 W</div>
+        <div class="icon-name">Batería</div>
+      </div>
+      <div class="icon-item">
+        <div class="icon-circle">🔌</div>
+        <div class="icon-watts" id="usb-out-w">0 W</div>
+        <div class="icon-name">USB</div>
       </div>
     </div>
   </div>
@@ -2013,6 +2044,12 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('pv-circle').className = 'icon-circle' + (d.pv_w > 5 ? ' charging' : '');
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
+
+        // Fila inferior (bottom row): CA / Batería / USB, misma fuente de
+        // datos que /api/status, nunca null (siempre 0 como mínimo).
+        document.getElementById('ac-out-w').textContent = (d.ac_out_w || 0) + ' W';
+        document.getElementById('extra-in-w').textContent = (d.extra_in_w || 0) + ' W';
+        document.getElementById('usb-out-w').textContent = (d.usb_out_w || 0) + ' W';
 
         // Batería extra: mismo criterio que las filas de abajo (batteryFlow), sin duplicar la lógica
         const extraCircle = document.getElementById('extra-circle');
