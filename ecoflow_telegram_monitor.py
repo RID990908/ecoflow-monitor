@@ -1912,7 +1912,7 @@ DASHBOARD_HTML = """<!doctype html>
      full GEOMETRY SPEC + fit-check arithmetic in the HTML comment above
      .ring-wrap below. */
   .lateral-overlay { position: absolute; left: 240px; top: 120px; width: 0; height: 0; }
-  .lateral-overlay .icon-item.lateral-icon { position: absolute; left: 34px; top: -12px; }
+  .lateral-overlay .icon-item.lateral-icon { position: absolute; left: 34px; top: 18px; }
   /* .lateral-overlay-left: exact x-mirror of .lateral-overlay above, for the
      Delta 2's own charge/discharge (as opposed to the extra/expansion
      battery on the right). Anchored at the ring's LEFT edge, same vertical
@@ -1923,7 +1923,7 @@ DASHBOARD_HTML = """<!doctype html>
      (mirror of the right side's left:34px..90px span: 34+56=90 far edge on
      the right becomes -90..-34 on the left, i.e. left:-90px, same width). */
   .lateral-overlay-left { position: absolute; left: 0px; top: 120px; width: 0; height: 0; }
-  .lateral-overlay-left .icon-item.lateral-icon { position: absolute; left: -90px; top: -12px; }
+  .lateral-overlay-left .icon-item.lateral-icon { position: absolute; left: -90px; top: 18px; }
   .flow-connectors.lateral { width: 64px; height: 10px; overflow: visible; display: block; }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt; stroke-width: 2.5;
@@ -2188,10 +2188,10 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
     <div class="lateral-overlay-left">
-      <svg class="flow-connectors lateral" width="64" height="10" viewBox="0 0 64 10">
-        <path d="M 0,0 L -54,0 Q -62,0 -62,8" fill="none" stroke="#232c36" stroke-width="2"/>
-        <path id="flow-delta2-charge" class="flow-overlay" d="M 0,0 L -54,0 Q -62,0 -62,8"/>
-        <path id="flow-delta2-discharge" class="flow-overlay" d="M -62,8 Q -62,0 -54,0 L 0,0"/>
+      <svg class="flow-connectors lateral" width="64" height="40" viewBox="0 0 64 40">
+        <path d="M 0,0 L -54,0 Q -62,0 -62,8 L -62,38" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-delta2-charge" class="flow-overlay" d="M 0,0 L -54,0 Q -62,0 -62,8 L -62,38"/>
+        <path id="flow-delta2-discharge" class="flow-overlay" d="M -62,38 L -62,8 Q -62,0 -54,0 L 0,0"/>
       </svg>
       <div class="icon-item lateral-icon">
         <div class="icon-circle" id="delta2-circle">🔋</div>
@@ -2200,10 +2200,10 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
     <div class="lateral-overlay">
-      <svg class="flow-connectors lateral" width="64" height="10" viewBox="0 0 64 10">
-        <path d="M 0,0 L 54,0 Q 62,0 62,8" fill="none" stroke="#232c36" stroke-width="2"/>
-        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,0 L 54,0 Q 62,0 62,8"/>
-        <path id="flow-lateral-discharge" class="flow-overlay" d="M 62,8 Q 62,0 54,0 L 0,0"/>
+      <svg class="flow-connectors lateral" width="64" height="40" viewBox="0 0 64 40">
+        <path d="M 0,0 L 54,0 Q 62,0 62,8 L 62,38" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,0 L 54,0 Q 62,0 62,8 L 62,38"/>
+        <path id="flow-lateral-discharge" class="flow-overlay" d="M 62,38 L 62,8 Q 62,0 54,0 L 0,0"/>
       </svg>
       <div class="icon-item lateral-icon">
         <div class="icon-circle" id="lateral-circle">🔋</div>
