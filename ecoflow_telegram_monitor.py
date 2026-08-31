@@ -1866,7 +1866,7 @@ DASHBOARD_HTML = """<!doctype html>
   .icon-dir { font-size: 11px; margin-top: 1px; transition: color 200ms var(--ease-out); }
   .icon-dir.charging { color: #4ade80; }
   .icon-dir.discharging { color: #f87171; }
-  .batt-icon { display: inline-flex; align-items: center; transition: color 200ms var(--ease-out); transform: translateX(-1.5px); }
+  .batt-icon { display: inline-flex; align-items: center; transition: color 200ms var(--ease-out); }
   .batt-icon.batt-green { color: #4ade80; }
   .batt-icon.batt-red { color: #f87171; }
   .batt-icon.batt-gray { color: #6b7684; }
