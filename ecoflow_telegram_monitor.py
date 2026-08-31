@@ -126,7 +126,6 @@ DEVICE_INFO = {
     "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
     "laptop": {"label": "Laptop", "emoji": "💻", "watts": 160},
     "ecoplay": {"label": "Ecoplay", "emoji": "📡", "watts": 120},
-    "tv": {"label": "TV", "emoji": "📺", "watts": 100},
 }
 for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
     for _i in range(1, _count + 1):
@@ -521,7 +520,7 @@ def set_bot_commands() -> None:
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
         {"command": "cargas", "description": "Qué encender/apagar ahora según el plan"},
         {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
-        {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off tv)"},
+        {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off laptop)"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
         {"command": "ecoplay", "description": "Hasta qué hora aguanta la batería propia de la Ecoplay (ej: /ecoplay 86)"},
         {"command": "help", "description": "Ver comandos disponibles"},
@@ -917,7 +916,7 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, tv, ventilador, powerbank)\n"
+    "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/cargado <ventilador/powerbank/ecoplay> — marcar como cargada; en ventilador/powerbank "
     "además prioriza el resto en el próximo reparto de excedente (ej: /cargado ventilador1 ventilador2). "
@@ -941,7 +940,6 @@ START_TEXT = "👋 Hola, soy el monitor de tu EcoFlow.\n\n" + HELP_TEXT
 
 
 _DEVICE_ALIASES = {
-    "tele": "tv", "television": "tv", "televisor": "tv",
     "power": "powerbank", "bank": "powerbank", "powerbanks": "powerbank",
     "ventiladores": "ventilador", "fan": "ventilador", "fans": "ventilador",
     "pc": "laptop", "compu": "laptop", "computadora": "laptop",
@@ -973,7 +971,7 @@ def _resolve_device_keys(word: str) -> list:
             return [key] if key in DEVICE_INFO else []
         return [f"{base}{i}" for i in range(1, count + 1)]
     if num:
-        return []  # "tv2" no existe, es de una sola unidad
+        return []  # "laptop2" no existe, es de una sola unidad
     return [base] if base in DEVICE_INFO else []
 
 
@@ -1319,7 +1317,7 @@ def watchdog_timer() -> None:
 # (congelador) se eliminó del sistema — la NEVERA tomó su rol: es la carga
 # protegida, se mantiene ON siempre salvo emergencia de batería, y se apaga
 # programado a las 12 AM (aguanta cerrada hasta el amanecer). Laptop,
-# Ventilador, Power bank y TV se reparten el excedente real en orden de
+# Ventilador, Power bank y Ecoplay se reparten el excedente real en orden de
 # prioridad (ver build_load_advisor_message) — ninguna tiene ventana horaria
 # fija, todas se evalúan contra system_net_w en el momento de la consulta.
 LOAD_ADVISOR_START_MIN = 6 * 60
@@ -1328,9 +1326,13 @@ BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet
 
 # El único horario fijo que queda es el apagado programado de la nevera a
 # medianoche (es la carga protegida, aguanta cerrada hasta el amanecer).
-# Laptop, TV, power bank y ventilador ya NO tienen ventanas horarias: se
+# Laptop, power bank y ventilador ya NO tienen ventanas horarias: se
 # habilitan o no según el excedente real del sistema (system_net_w) en el
-# momento de la consulta, sin importar la hora que sea.
+# momento de la consulta, sin importar la hora que sea. La ÚNICA excepción es
+# el ORDEN de prioridad de Laptop dentro de esa cola (ver
+# _laptop_deprioritized y build_load_advisor_message): de 2 PM a 7 AM pasa a
+# evaluarse último (después de Ventilador, Power bank y Ecoplay) en vez de
+# justo después de la Nevera — es de horario, no de encendido/apagado.
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM", "nevera": "on",
      "battery_goal": "Sin sol aún, ~-2%"},
@@ -1368,7 +1370,7 @@ def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detai
     ahora?), y el texto ON/OFF es lo que vos marcaste de verdad con
     /on-/off — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
     dice que había que apagarlo pero lo tenés marcado prendido). Para nevera,
-    laptop y TV (una sola unidad cada una)."""
+    laptop y ecoplay (una sola unidad cada una)."""
     dot = "🟢" if plan_ok else "🔴"
     state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
     line = f"{emoji} {label}: {dot} {state_text}"
@@ -1389,7 +1391,7 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
     en vez de un conteo aparte. Si TODAS las unidades están marcadas, se
     resume con un solo ✅ al final en vez de repetir el ✓ en cada una.
 
-    El detalle de watts (mismo estilo que laptop/TV: "necesitas X W,
+    El detalle de watts (mismo estilo que laptop/ecoplay: "necesitas X W,
     tienes Y W") solo se muestra si hace falta actuar: alguna unidad
     marcada ON de verdad está en rojo. X es la suma de TODAS las unidades
     marcadas (lo que pediste en total), no solo las que no entraron.
@@ -1427,8 +1429,8 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
 
 def _allocate_budget(watts: int, available_w) -> tuple:
     """Descuenta `watts` del excedente disponible si entra, y devuelve
-    (ok, detail, excedente_restante) — la pieza que permite que Laptop, TV,
-    Power bank y Ventilador se repartan el MISMO excedente en vez de que
+    (ok, detail, excedente_restante) — la pieza que permite que Laptop,
+    Ecoplay, Power bank y Ventilador se repartan el MISMO excedente en vez de que
     cada uno lo evalúe por separado contra el total (eso hacía que
     aparecieran varias en verde a la vez aunque juntas no entraran)."""
     if available_w is None:
@@ -1455,21 +1457,39 @@ VENTILADOR_DEVICE_KEYS = [f"ventilador{i}" for i in range(1, MULTI_UNIT_DEVICES[
 _BATTERY_EMERGENCY_ACTIVE = False  # trackea la transición para loguear una sola vez al entrar/salir, no en cada llamada
 
 
+def _laptop_deprioritized(now=None) -> bool:
+    """True entre las 14:00 (2 PM) y las 7:00 AM (ventana que cruza
+    medianoche): en ese horario la Laptop pasa a evaluarse ÚLTIMA en la cola
+    de excedente (después de Ventilador, Power bank y Ecoplay) en vez de
+    justo después de la Nevera. Entre las 7:00 y las 14:00 mantiene su
+    posición normal (justo después de la Nevera). Es el mismo estilo de
+    chequeo hora del día que usa _current_load_block: minute_of_day contra
+    un rango, acá con wraparound porque el rango cruza la medianoche. Ojo:
+    esto solo cambia el ORDEN DE ASIGNACIÓN del excedente (quién se lleva el
+    presupuesto primero) — el texto de la Laptop se sigue mostrando siempre
+    en el mismo lugar del mensaje (Nevera, Laptop, Ventilador, Power bank,
+    Ecoplay) para no reordenar el mensaje dos veces por día; lo que cambia
+    es a quién le toca 🟢 primero cuando el excedente no alcanza para
+    todas."""
+    now = now or datetime.now(TZ)
+    minute_of_day = now.hour * 60 + now.minute
+    return not (7 * 60 <= minute_of_day < 14 * 60)
+
+
 def build_load_advisor_message(m: dict = None) -> str:
-    """Nevera, Laptop, TV, Power bank, Ventilador y Ecoplay — cada una ya
+    """Nevera, Laptop, Ventilador, Power bank y Ecoplay — cada una ya
     evalúa el estado real (watts, batería) en vez de ser un texto fijo.
     Prioridad: Nevera (protegida, no compite por excedente) > Laptop >
-    Ventilador > Power bank > Ecoplay > TV — estas últimas cinco se reparten
+    Ventilador > Power bank > Ecoplay — estas últimas cuatro se reparten
     el MISMO excedente (system_net_w) en orden, restando lo que cada una se
-    lleva antes de evaluar la siguiente. Ecoplay va antes que TV porque ahora
-    consume de la Delta 2 como cualquier otra carga y el usuario pidió
-    mantenerla simple, sin trato especial. Antes cada una miraba el excedente
-    total por separado, lo que podía mostrar varias en verde a la vez aunque
-    juntas no entraran. Por debajo de BATTERY_EMERGENCY_THRESHOLD se apaga
-    TODO, Ecoplay incluida (sin excepción de 'es internet, dejalo prendido')
-    — no alcanza con bajar solo la nevera si el resto sigue mostrando 'ON'
-    como si nada, porque son de menor prioridad y deben ceder primero/junto
-    con ella."""
+    lleva antes de evaluar la siguiente (salvo entre 14:00 y 7:00, ver
+    _laptop_deprioritized: ahí Laptop pasa a evaluarse último). Antes cada
+    una miraba el excedente total por separado, lo que podía mostrar varias
+    en verde a la vez aunque juntas no entraran. Por debajo de
+    BATTERY_EMERGENCY_THRESHOLD se apaga TODO, Ecoplay incluida (sin
+    excepción de 'es internet, dejalo prendido') — no alcanza con bajar
+    solo la nevera si el resto sigue mostrando 'ON' como si nada, porque
+    son de menor prioridad y deben ceder primero/junto con ella."""
     block = _current_load_block()
     if block is None:
         return ""
@@ -1498,7 +1518,6 @@ def build_load_advisor_message(m: dict = None) -> str:
             vent_line,
             pb_line,
             _status_line("📡", "Ecoplay", False, ["ecoplay"]) + _ecoplay_cargas_suffix(now),
-            _status_line("📺", "TV", False, ["tv"]),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
@@ -1506,27 +1525,40 @@ def build_load_advisor_message(m: dict = None) -> str:
         nevera_ok, nevera_detail = _nevera_status(block["nevera"])
 
         available = m["system_net_w"]
-        laptop_ok, laptop_detail, available = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available)
-        if laptop_ok or not DEVICE_STATE.get("laptop"):
-            laptop_detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
-        laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
 
-        vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
-        pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
+        def _allocate_laptop(available_w):
+            ok, detail, remaining = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available_w)
+            if ok or not DEVICE_STATE.get("laptop"):
+                detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
+            return ok, detail, remaining
 
-        # Ecoplay ahora consume de la Delta 2 como cualquier otra carga —
-        # va antes que TV en la cola porque el usuario pidió simplicidad, sin
-        # trato especial por ser "internet" (antes tenía alimentación
-        # propia y por eso quedaba fija en verde).
-        ecoplay_ok, ecoplay_detail, available = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available)
-        if ecoplay_ok or not DEVICE_STATE.get("ecoplay"):
-            ecoplay_detail = ""
-        ecoplay_line = _status_line("📡", "Ecoplay", ecoplay_ok, ["ecoplay"], ecoplay_detail) + _ecoplay_cargas_suffix(now)
+        def _allocate_ecoplay(available_w):
+            ok, detail, remaining = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available_w)
+            if ok or not DEVICE_STATE.get("ecoplay"):
+                detail = ""
+            line = _status_line("📡", "Ecoplay", ok, ["ecoplay"], detail) + _ecoplay_cargas_suffix(now)
+            return line, remaining
 
-        tv_ok, tv_detail, available = _allocate_budget(DEVICE_INFO["tv"]["watts"], available)
-        if tv_ok or not DEVICE_STATE.get("tv"):
-            tv_detail = ""
-        tv_line = _status_line("📺", "TV", tv_ok, ["tv"], tv_detail)
+        # Orden de asignación del excedente: normalmente Laptop va justo
+        # después de la Nevera. Entre las 14:00 y las 7:00 (_laptop_deprioritized)
+        # el usuario pidió que la Laptop pase a MÍNIMA prioridad — se evalúa
+        # último, después de Ventilador, Power bank y Ecoplay — porque de
+        # noche prefiere reservar el excedente para esas otras cargas antes
+        # que la laptop. El texto sigue apareciendo siempre en el mismo
+        # orden de lectura (Nevera, Laptop, Ventilador, Power bank, Ecoplay)
+        # — solo cambia a quién le toca 🟢 primero cuando escasea.
+        if _laptop_deprioritized(now):
+            vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
+            pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
+            ecoplay_line, available = _allocate_ecoplay(available)
+            laptop_ok, laptop_detail, available = _allocate_laptop(available)
+            laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
+        else:
+            laptop_ok, laptop_detail, available = _allocate_laptop(available)
+            laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
+            vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
+            pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
+            ecoplay_line, available = _allocate_ecoplay(available)
 
         lines = [
             f"🔆 *Gestión de cargas* · {block['label']}",
@@ -1535,7 +1567,6 @@ def build_load_advisor_message(m: dict = None) -> str:
             vent_line,
             pb_line,
             ecoplay_line,
-            tv_line,
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
@@ -1599,7 +1630,7 @@ BATTERY_CHECKPOINTS = [
 # directo al mediodía y generar confusión (ej. "estamos en el período de
 # hasta las 9 pero dice que para el mediodía"). El
 # 100% del cierre solo es realista si te mantenés en nevera+internet nomás
-# (laptop/TV/ventilador/power bank se comen el excedente que hace falta
+# (laptop/ventilador/power bank se comen el excedente que hace falta
 # para juntar esa carga) — confirmado con el usuario, no es un objetivo
 # válido bajo uso mixto normal.
 
@@ -1684,18 +1715,18 @@ def _check_battery_projection(now=None) -> None:
     if projected < floor - PROJECTION_ALERT_MARGIN:
         if _projection_alerted_for.get(cp_min) != today:
             # "Mejor caso": cuánto cambiaría la proyección si apagaras TODA la
-            # carga discrecional marcada (laptop, TV, ventilador, power bank —
+            # carga discrecional marcada (laptop, ventilador, power bank —
             # nevera/internet quedan afuera porque son protegidas). Si ni así
             # se llega a la meta, decir "bajá carga" es engañoso: el problema
             # no es cuánto estás gastando, es que no hay sol suficiente.
-            discretionary_keys = ["laptop", "tv"] + VENTILADOR_DEVICE_KEYS + POWERBANK_DEVICE_KEYS
+            discretionary_keys = ["laptop"] + VENTILADOR_DEVICE_KEYS + POWERBANK_DEVICE_KEYS
             freeable_w = sum(DEVICE_INFO[k]["watts"] for k in discretionary_keys if DEVICE_STATE.get(k))
             best_case_net_w = m["system_net_w"] + freeable_w
             best_proj = _project_to_checkpoint(now, m["avg_soc"], best_case_net_w)
             best_case_helps = best_proj is not None and best_proj[2] >= floor - PROJECTION_ALERT_MARGIN
 
             if best_case_helps:
-                action = "Bajá carga (laptop, TV, power bank, ventilador) — la nevera es protegida, no la toques."
+                action = "Bajá carga (laptop, power bank, ventilador) — la nevera es protegida, no la toques."
             else:
                 action = (
                     "Ni apagando todo lo que se puede llegás a esa meta ahora mismo — "
