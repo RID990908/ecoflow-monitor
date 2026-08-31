@@ -145,6 +145,7 @@ def _save_persisted_state() -> None:
                     "was_full": WAS_FULL,
                     "last_ac_timestamp": LAST_AC_TIMESTAMP,
                     "device_state": DEVICE_STATE,
+                    "ecoplay_pct": ECOPLAY_LAST_PCT,
                 },
                 f,
             )
@@ -160,6 +161,7 @@ WAS_FULL = _persisted.get("was_full", False)
 LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 _saved_device_state = _persisted.get("device_state", {})
 DEVICE_STATE = {key: bool(_saved_device_state.get(key, False)) for key in DEVICE_INFO}
+ECOPLAY_LAST_PCT = _persisted.get("ecoplay_pct")
 _DATA_STALE_ALERTED = False
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
@@ -507,6 +509,7 @@ def set_bot_commands() -> None:
         {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
         {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off tv)"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
+        {"command": "ecoplay", "description": "Hasta qué hora aguanta la batería propia de la Ecoplay (ej: /ecoplay 86)"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
     resp = requests.post(
@@ -613,6 +616,67 @@ def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
     eta = datetime.now(TZ) + timedelta(hours=hours)
     h, m = divmod(int(round(hours * 60)), 60)
     return f"🪫 ~{h}h {m}m para llegar al {threshold}% (a las {eta.strftime('%H:%M')})"
+
+
+# Batería propia de la Ecoplay/WiFi (power bank aparte, no reporta telemetría
+# como la Delta 2 — el usuario informa el % a mano con /ecoplay). Capacidad y
+# consumo confirmados por el usuario: ~484 Wh de capacidad total, 35-45 W de
+# consumo real de la WiFi corriendo de esa batería.
+ECOPLAY_BATTERY_WH = 484
+ECOPLAY_MIN_W = 35
+ECOPLAY_MAX_W = 45
+ECOPLAY_TARGET_HOUR = 7
+ECOPLAY_TARGET_MINUTE = 30
+
+
+def _next_ecoplay_target(now) -> datetime:
+    target = now.replace(hour=ECOPLAY_TARGET_HOUR, minute=ECOPLAY_TARGET_MINUTE, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return target
+
+
+def _ecoplay_autonomy(pct: int, now=None) -> dict:
+    """Dado el % que el usuario reporta a mano de la batería propia de la
+    Ecoplay, calcula cuánto aguanta con el rango de consumo real (35-45 W) y
+    a qué hora, como mucho, conviene pasarla a esa batería para que llegue
+    sin cortarse hasta el próximo objetivo (7:30 AM). El caso seguro es
+    siempre el peor caso (45 W): da menos horas de autonomía que el mejor
+    caso, así que arrancar recién ahí es lo que garantiza llegar a la meta
+    incluso si el consumo real termina siendo el más alto del rango."""
+    now = now or datetime.now(TZ)
+    wh_available = ECOPLAY_BATTERY_WH * pct / 100
+    worst_hours = wh_available / ECOPLAY_MAX_W
+    best_hours = wh_available / ECOPLAY_MIN_W
+    target = _next_ecoplay_target(now)
+    worst_switch = target - timedelta(hours=worst_hours)
+    best_switch = target - timedelta(hours=best_hours)
+
+    def _hm(hours):
+        h, m = divmod(int(round(hours * 60)), 60)
+        return f"{h}h {m}m"
+
+    return {
+        "pct": pct,
+        "wh_available": round(wh_available),
+        "worst_hours_text": _hm(worst_hours),
+        "best_hours_text": _hm(best_hours),
+        "target_text": target.strftime("%H:%M"),
+        "worst_switch_text": worst_switch.strftime("%H:%M"),
+        "best_switch_text": best_switch.strftime("%H:%M"),
+        "safe_switch_text": worst_switch.strftime("%H:%M"),
+    }
+
+
+def _format_ecoplay_message(info: dict) -> str:
+    return (
+        f"📡 Ecoplay al {info['pct']}% (~{info['wh_available']} Wh disponibles), "
+        f"consumo 35-45 W:\n\n"
+        f"• Peor caso (45 W): ~{info['worst_hours_text']} de autonomía\n"
+        f"• Mejor caso (35 W): ~{info['best_hours_text']} de autonomía\n\n"
+        f"Para que aguante hasta las {info['target_text']}, lo más seguro es no "
+        f"pasarla a la batería propia antes de las ~{info['safe_switch_text']}."
+    )
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -797,6 +861,8 @@ HELP_TEXT = (
     "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, tv, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
+    "/ecoplay <porcentaje> — hasta qué hora aguanta la batería propia de la Ecoplay/WiFi "
+    "(35-45 W) para llegar a las 7:30 AM (ej: /ecoplay 86)\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
     f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
@@ -848,7 +914,7 @@ def _resolve_device_keys(word: str) -> list:
 
 
 def handle_command(text: str, chat_id: str) -> None:
-    global BATTERY_LOW_THRESHOLD
+    global BATTERY_LOW_THRESHOLD, ECOPLAY_LAST_PCT
     parts = text.strip().split()
     cmd = parts[0].split("@")[0].lower()
     if cmd == "/reporte":
@@ -875,6 +941,14 @@ def handle_command(text: str, chat_id: str) -> None:
                 _save_persisted_state()
                 lines = [f"{DEVICE_INFO[k]['emoji']} {DEVICE_INFO[k]['label']}: marcado {estado}" for k in keys]
                 send_telegram("\n".join(lines), chat_id=chat_id)
+    elif cmd == "/ecoplay":
+        if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
+            send_telegram("Uso: /ecoplay <porcentaje entre 0 y 100>, ej: /ecoplay 86", chat_id=chat_id)
+        else:
+            ECOPLAY_LAST_PCT = int(parts[1])
+            _save_persisted_state()
+            info = _ecoplay_autonomy(ECOPLAY_LAST_PCT)
+            send_telegram(_format_ecoplay_message(info), chat_id=chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)
@@ -1641,6 +1715,7 @@ def get_dashboard_status() -> dict:
         "goal_floor": goal_floor,
         "goal_projected": goal_projected,
         "goal_met": goal_met,
+        "ecoplay": _ecoplay_autonomy(ECOPLAY_LAST_PCT, now) if ECOPLAY_LAST_PCT is not None else None,
     }
 
 
@@ -1826,6 +1901,11 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="cargas-box" id="cargas-box"></div>
   </div>
 
+  <div class="cargas" id="ecoplay-wrap" style="display:none">
+    <div class="title">📡 Ecoplay · batería propia</div>
+    <div class="cargas-box" id="ecoplay-box"></div>
+  </div>
+
   <div class="devices">
     <div class="title">Qué tenés encendido</div>
     <div id="devices"></div>
@@ -1913,6 +1993,24 @@ DASHBOARD_HTML = """<!doctype html>
           etaGoal.className = 'eta-goal ' + (d.goal_met ? 'eta-ok' : 'eta-warn');
         } else {
           etaGoal.textContent = '';
+        }
+
+        // Batería propia de la Ecoplay/WiFi: el % lo informa el usuario a
+        // mano por Telegram (/ecoplay <pct>), acá solo se muestra el último
+        // valor conocido con el cálculo recalculado en vivo (la hora
+        // objetivo es siempre "el próximo 7:30 AM" desde el momento en que
+        // se pide /api/status, no desde que se informó el %).
+        const ecoplayWrap = document.getElementById('ecoplay-wrap');
+        if (d.ecoplay) {
+          const e = d.ecoplay;
+          ecoplayWrap.style.display = '';
+          document.getElementById('ecoplay-box').textContent =
+            `📡 Al ${e.pct}% (~${e.wh_available} Wh)\n` +
+            `Peor caso (45 W): ~${e.worst_hours_text}\n` +
+            `Mejor caso (35 W): ~${e.best_hours_text}\n\n` +
+            `Para llegar a las ${e.target_text}, no pasarla antes de las ~${e.safe_switch_text}.`;
+        } else {
+          ecoplayWrap.style.display = 'none';
         }
 
         document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
