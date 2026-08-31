@@ -756,6 +756,15 @@ def _gather_metrics(passive: bool = False) -> dict:
     # separada de extra_in_w (carga) — alimenta el nodo "Extra" de arriba, que
     # ahora SIEMPRE muestra descarga (no neto). Ver sdd/power-flow-bottom-nodes.
     extra_out_w_nf = _nf(extra_out_w)
+    # delta2_charge_w/delta2_discharge_w: la Delta 2 no tiene un campo directo
+    # confiable de carga/descarga (bms_bmsStatus.inputWatts/outputWatts está
+    # roto, ver comentario arriba), pero delta2_net_w SÍ es confiable (misma
+    # cuenta que ya alimenta la fila "Delta 2" en la lista de baterías). Se
+    # separa en dos magnitudes no-negativas, mutuamente excluyentes por
+    # construcción, para el nodo lateral izquierdo del ring (espejo del nodo
+    # "Batería" derecho). Ver sdd/power-flow-bottom-nodes.
+    delta2_charge_w = _nf(delta2_net_w if delta2_net_w > 0 else 0)
+    delta2_discharge_w = _nf(-delta2_net_w if delta2_net_w < 0 else 0)
     ac_present = get_ac_present(data)
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
     source_verb, source_emoji = _charge_source(pv_w, ac_present, ac_w, system_net_w)
@@ -837,6 +846,8 @@ def _gather_metrics(passive: bool = False) -> dict:
         "extra_in_w": extra_in_w_nf,
         "extra_out_w": extra_out_w_nf,
         "usb_out_w": usb_out_w,
+        "delta2_charge_w": delta2_charge_w,
+        "delta2_discharge_w": delta2_discharge_w,
     }
 
 
@@ -1801,6 +1812,8 @@ def get_dashboard_status() -> dict:
         "extra_in_w": m["extra_in_w"] or 0,
         "extra_out_w": m["extra_out_w"] or 0,
         "usb_out_w": m["usb_out_w"] or 0,
+        "delta2_charge_w": m["delta2_charge_w"] or 0,
+        "delta2_discharge_w": m["delta2_discharge_w"] or 0,
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
         "stale": is_stale,
         "stale_minutes": stale_minutes,
@@ -1882,7 +1895,7 @@ DASHBOARD_HTML = """<!doctype html>
     fill: none; stroke: #4ade80; stroke-width: 2; stroke-linecap: round;
     stroke-dasharray: 6 10; opacity: 0; transition: opacity 200ms var(--ease-out);
   }
-  #flow-ac-out.flow-overlay, #flow-usb-out.flow-overlay, #flow-lateral-discharge.flow-overlay { stroke: #f87171; }
+  #flow-ac-out.flow-overlay, #flow-usb-out.flow-overlay, #flow-lateral-discharge.flow-overlay, #flow-delta2-discharge.flow-overlay { stroke: #f87171; }
   .flow-overlay.active { opacity: 1; animation: flow-dash 1.1s linear infinite; }
   @keyframes flow-dash { to { stroke-dashoffset: -16; } }
   /* width:300px + max-width:100% (NOT a fixed 300px) so these rows shrink
@@ -1900,6 +1913,17 @@ DASHBOARD_HTML = """<!doctype html>
      .ring-wrap below. */
   .lateral-overlay { position: absolute; left: 240px; top: 120px; width: 0; height: 0; }
   .lateral-overlay .icon-item.lateral-icon { position: absolute; left: 34px; top: -15px; }
+  /* .lateral-overlay-left: exact x-mirror of .lateral-overlay above, for the
+     Delta 2's own charge/discharge (as opposed to the extra/expansion
+     battery on the right). Anchored at the ring's LEFT edge, same vertical
+     midpoint (left:0px instead of left:240px = ring width). The hook SVG
+     inside uses negative local x coordinates (mirrored path, see the HTML
+     GEOMETRY SPEC comment above .ring-wrap) rendered via overflow:visible
+     (no viewBox change needed). The icon is positioned at left:-90px
+     (mirror of the right side's left:34px..90px span: 34+56=90 far edge on
+     the right becomes -90..-34 on the left, i.e. left:-90px, same width). */
+  .lateral-overlay-left { position: absolute; left: 0px; top: 120px; width: 0; height: 0; }
+  .lateral-overlay-left .icon-item.lateral-icon { position: absolute; left: -90px; top: -15px; }
   .flow-connectors.lateral { width: 64px; height: 10px; overflow: visible; display: block; }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt; stroke-width: 2.5;
@@ -2124,12 +2148,55 @@ DASHBOARD_HTML = """<!doctype html>
        spare) — no clipping. This is tighter than the old composite's
        margin (21px spare at 320px with a 190px ring) because the ring is
        now back to full 240px size, but it still fits safely.
-       KEEP IN SYNC WITH App.tsx lateral connector Svg (and vice-versa). -->
+       KEEP IN SYNC WITH App.tsx lateral connector Svg (and vice-versa).
+
+       LEFT MIRROR (Delta 2's own charge/discharge, sdd/power-flow-bottom-
+       nodes): a second hook, exact x-mirror of the one above, exits the
+       ring's LEFT edge at the same vertical midpoint (anchor left:0px
+       instead of left:240px). Hook path uses negative local x (same
+       viewBox, overflow:visible renders it fine, no clipping) — every x
+       coordinate of the right hook's `d` is negated: "M 0,0 L 54,0 Q 62,0
+       62,8" -> "M 0,0 L -54,0 Q -62,0 -62,8". Icon offset mirrors too:
+       right side spans left:34px..90px (34+56 width) past the ring edge,
+       so left side spans left:-90px..-34px (same 56px width, same 34px
+       near-gap, same 90px total reach), i.e. CSS left:-90px.
+       Fit-check for BOTH hooks coexisting at a ~430px real device (16px
+       body padding each side, 32px total -> 398px content width): the
+       ring is centered independently via body's flex (align-items:center)
+       and the hook containers are width:0/height:0 absolute overlays that
+       do NOT consume layout width, so left/right hooks do not compete for
+       shared budget — each is checked independently against its own
+       viewport edge:
+         content width = 430 - 32 = 398px
+         ring offset (centering margin each side) = (398-240)/2 = 79px
+         ring abs left edge = 16(body pad) + 79 = 95px
+         ring abs right edge = 16 + 79 + 240 = 335px
+         right hook reach = 90px -> rightmost = 335+90 = 425px -> spare =
+           430-425 = 5px (matches the existing right-side hook, tuned to
+           exactly this margin per commit 154cf41)
+         left hook reach = 90px (mirrored, identical) -> leftmost =
+           95-90 = 5px -> spare = 5-0 = 5px
+       Both sides get the SAME 5px spare, by symmetry of centered layout —
+       no scaling-down needed, the naive "left+ring+right <= content"
+       framing would wrongly assume the hooks consume layout width (they
+       don't; only the ring does). KEEP IN SYNC WITH App.tsx. -->
   <div class="ring-wrap">
     <div class="ring" id="ring">
       <div class="ring-inner">
         <div class="pct" id="pct">--%</div>
         <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
+      </div>
+    </div>
+    <div class="lateral-overlay-left">
+      <svg class="flow-connectors lateral" width="64" height="10" viewBox="0 0 64 10">
+        <path d="M 0,0 L -54,0 Q -62,0 -62,8" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-delta2-charge" class="flow-overlay" d="M 0,0 L -54,0 Q -62,0 -62,8"/>
+        <path id="flow-delta2-discharge" class="flow-overlay" d="M -62,8 Q -62,0 -54,0 L 0,0"/>
+      </svg>
+      <div class="icon-item lateral-icon">
+        <div class="icon-circle" id="delta2-circle">🔋</div>
+        <div class="icon-watts" id="delta2-w">0 W</div>
+        <div class="icon-name">Delta 2</div>
       </div>
     </div>
     <div class="lateral-overlay">
@@ -2350,6 +2417,24 @@ DASHBOARD_HTML = """<!doctype html>
         lateralCircle.className = 'icon-circle' + (lateralState !== 'neutral' ? ' ' + lateralState : '');
         document.getElementById('flow-lateral-charge').classList.toggle('active', lateralCharging);
         document.getElementById('flow-lateral-discharge').classList.toggle('active', lateralDischarging);
+
+        // Nodo lateral izquierdo (espejo del de arriba, pero para la carga/
+        // descarga PROPIA de la Delta 2, no la batería extra): misma lógica,
+        // fuente de datos delta2_charge_w/delta2_discharge_w (derivados de
+        // delta2_net_w, que ya es confiable — ver _gather_metrics). Nunca
+        // ambos a la vez por construcción (uno de los dos siempre es 0).
+        const delta2Circle = document.getElementById('delta2-circle');
+        const delta2OutW = d.delta2_discharge_w || 0;
+        const delta2InW = d.delta2_charge_w || 0;
+        const delta2Discharging = delta2OutW > 5;
+        const delta2Charging = !delta2Discharging && delta2InW > 5;
+        const delta2W = delta2Discharging ? delta2OutW : delta2InW;
+        const delta2State = delta2Discharging ? 'discharging' : delta2Charging ? 'charging' : 'neutral';
+        document.getElementById('delta2-w').textContent = delta2W + ' W';
+        delta2Circle.innerHTML = batteryIcon(delta2State);
+        delta2Circle.className = 'icon-circle' + (delta2State !== 'neutral' ? ' ' + delta2State : '');
+        document.getElementById('flow-delta2-charge').classList.toggle('active', delta2Charging);
+        document.getElementById('flow-delta2-discharge').classList.toggle('active', delta2Discharging);
 
         // Overlay de flujo animado (líneas conectoras): solo se anima la
         // línea del nodo cuyo wattage actual supera el piso de ruido (5W).
