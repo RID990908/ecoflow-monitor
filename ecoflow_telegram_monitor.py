@@ -2038,111 +2038,9 @@ DASHBOARD_HTML = """<!doctype html>
   .live-dot.stale { background: #ef4444; animation: pulse 1s ease-in-out infinite; }
   #mqtt-stale-text { color: #f87171; }
   @keyframes pulse { 50% { opacity: 0.3; } }
-
-  /* TABLET+ LAYOUT (>=768px) — power-flow-bottom-nodes follow-up batch.
-     Below this breakpoint .dashboard-grid is `display: contents`, i.e. it
-     generates no box and every child lays out exactly as before this
-     wrapper was introduced (body's flex-column rule above applies to them
-     directly) — nothing in this block runs, nothing below 768px changes.
-     This does NOT touch .ring-wrap/.lateral-overlay/.lateral-overlay-left/
-     .icons-row.top/.icons-row.bottom/any SVG path — those keep their
-     mobile-tuned values untouched at every width; only NEW rules are
-     added here, scoped inside the media query, purely additive. */
-  .dashboard-grid { display: contents; }
-  .side-col-left, .side-col-right { display: contents; }
-  @media (min-width: 768px) {
-    .dashboard-grid {
-      display: grid;
-      grid-template-columns: minmax(180px, 280px) minmax(420px, 460px) minmax(180px, 280px);
-      column-gap: 28px;
-      align-items: start;
-      justify-items: center;
-      justify-content: center;
-      width: 100%;
-      margin: 0 auto;
-    }
-    /* Central flow diagram: same 5 elements as mobile (plus the "updated"
-       footer text), pinned to the middle column. Their own width/max-width
-       rules (defined above, unchanged) already cap them at their mobile
-       size — justify-items:center on the grid keeps them centered inside
-       the wider column instead of stretching or left-aligning. */
-    .io-row, .flow-top-wrap, .ring-wrap, .flow-bottom-wrap, .eta-box, .updated {
-      grid-column: 2;
-    }
-    /* Secondary panels, split 2/2 for balanced visual weight: battery
-       status (.batteries) + load-management guidance (.cargas) go left
-       since they're the "what's happening with the batteries" pair;
-       charge-state detail (#carga-estado-wrap) + the device toggle list
-       (.devices-panel-right) go right since they're the "what's plugged
-       in / actionable controls" pair. Content/IDs/JS wiring untouched —
-       only grid-column placement changes at this breakpoint. */
-    /* .side-col-left/.side-col-right wrapper divs stay display:contents
-       even here (do NOT become grid items) — a wrapping single item that
-       covers a whole side's content forces that entire content's height
-       into ONE grid row, which is what pushed the center diagram down
-       last round. Assign grid placement to the INNER items individually
-       instead, so their height gets distributed across the SAME rows the
-       center column's own elements naturally use (row 1 = io-row-sized,
-       row 2 = flow-top-wrap-sized, etc.) — no row is forced taller than
-       the center column actually needs. */
-    /* NOT row 1 — .batteries/#carga-estado-wrap (~150-300px) are taller
-       than .io-row alone (~60px) and would inflate row 1, pushing the
-       AC/Solar icon row (row 2) down and creating a gap right under the
-       header. Row 2 (flow-top-wrap, ~250px w/ curve padding) already
-       needs to be tall, so sharing it there costs nothing extra. */
-    .batteries, #carga-estado-wrap { grid-row: 2; }
-    .cargas, .devices-panel-right { grid-row: 3; }
-    .batteries, .cargas { grid-column: 1; }
-    #carga-estado-wrap, .devices-panel-right { grid-column: 3; }
-    .batteries, .cargas, #carga-estado-wrap, .devices-panel-right {
-      margin-top: 0;
-    }
-    /* The center column is inherently much taller than the two side
-       panels (Gestión de cargas / Estado de carga), leaving a large dead
-       zone below the short panels once the ring's own diagram — mobile
-       proportions, unchanged — stretches the whole grid row's height.
-       Tighten the center column's spacing (ring size unaffected by icon
-       row alignment, only shrinks the ring itself) and cut the smaller
-       vertical margins throughout to shrink the overall page height. */
-    .ring-wrap { width: 190px; height: 190px; margin: 4px 0; }
-    /* .lateral-overlay/.lateral-overlay-left anchor at left:240px/top:120px
-       (mobile's 240px ring's right edge + vertical midpoint) — with the
-       ring now 190px here, re-anchor to match (190px edge, 95px = half). */
-    .lateral-overlay { left: 190px; top: 95px; }
-    .lateral-overlay-left { top: 95px; }
-    .pct { font-size: 38px; }
-    .pct-sub { font-size: 11px; }
-    .pct-sub .dur { font-size: 18px; }
-    .io-row { margin-bottom: 2px; }
-    .icons-row { margin-bottom: 2px; }
-    .eta-box { margin-top: 0; padding: 10px 18px; }
-    .batteries, .devices, .cargas { margin-top: 6px; }
-    .side-col-left, .side-col-right { gap: 4px; }
-    .updated { margin-top: 2px; }
-    .battery-row { margin-top: 5px; padding: 9px 14px; }
-    .updated { margin-top: 8px; }
-  }
 </style>
 </head>
 <body>
-  <!-- .dashboard-grid: tablet+ (>=768px) 3-column layout wrapper, added in
-       power-flow-bottom-nodes follow-up batch. Mobile default is
-       `display: contents` — the wrapper generates NO box at all below
-       768px, so every child renders exactly as if this div didn't exist
-       (body's own flex-column layout applies directly to them, unchanged).
-       At >=768px it becomes `display: grid` with 3 columns; the 5 central
-       flow-diagram elements (.io-row, .flow-top-wrap, .ring-wrap,
-       .flow-bottom-wrap, .eta-box) plus .updated are pinned to the middle
-       column via grid-column:2, and the 4 secondary panels
-       (.batteries/.cargas go left, #carga-estado-wrap/.devices-panel-right
-       go right) are pinned to column 1/3 respectively — see the media
-       query in <style> above (search ".dashboard-grid"). HTML source order
-       is intentionally UNCHANGED (grid-row is left to auto-placement,
-       which packs each column independently in DOM order) so no
-       getElementById call is affected. Do NOT add width/margin/etc. to
-       .dashboard-grid outside the media query — the mobile layout must
-       stay byte-for-byte identical to before this wrapper existed. -->
-  <div class="dashboard-grid">
   <div class="io-row">
     <div class="io-col in"><div class="io-label" id="in-label"><svg class="io-svg" viewBox="0 0 24 24" width="14" height="14"><path d="M12 3v10m0 0l-4-4m4 4l4-4M4 19h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg> Entrada</div><div class="io-value" id="in-w">-- W</div></div>
     <div class="io-center">
@@ -2360,14 +2258,12 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="eta-goal" id="eta-goal"></div>
   </div>
 
-  <div class="side-col-left">
   <div class="batteries" id="batteries"></div>
 
   <div class="cargas" id="cargas-wrap" style="display:none">
     <div class="title">Gestión de cargas</div>
     <div class="cargas-box" id="cargas-box"></div>
   </div>
-  </div><!-- /.side-col-left -->
 
   <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
        Solo alcanzable tocando el badge de Ecoplay en "Estado de carga"
@@ -2389,24 +2285,21 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </div>
 
-  <div class="side-col-right">
   <div class="devices" id="carga-estado-wrap" style="display:none">
     <div class="title">Estado de carga</div>
     <div id="carga-estado"></div>
   </div>
 
-  <div class="devices devices-panel-right">
+  <div class="devices">
     <div class="title">Qué tenés encendido</div>
     <div id="devices"></div>
   </div>
-  </div><!-- /.side-col-right -->
 
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
     <span id="mqtt-stale-text"></span>
   </div>
-  </div><!-- /.dashboard-grid -->
   <script>
     // Ícono de batería en SVG (verde=carga, roja=descarga, gris=estable/sin datos).
     // Un solo shape, coloreado con currentColor según la clase, en vez de 3
