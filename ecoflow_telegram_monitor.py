@@ -1018,6 +1018,11 @@ def handle_command(text: str, chat_id: str) -> None:
             if resolved:
                 for k in resolved:
                     DEVICE_CHARGED[k] = cmd == "/cargado"
+                    # Cargada implica que ya no está en uso: si estaba encendida
+                    # (DEVICE_STATE) se apaga sola, para que "Qué tienes
+                    # encendido" no siga mostrándola prendida.
+                    if cmd == "/cargado":
+                        DEVICE_STATE[k] = False
                 # Ecoplay es la única con sistema de % propio (/ecoplay <pct>);
                 # al marcarla descargada por acá, sincronizamos ese % a 0 para
                 # que /cargas y _ecoplay_cargas_suffix reflejen lo mismo que
@@ -2322,7 +2327,7 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 
   <div class="devices">
-    <div class="title">Qué tenés encendido</div>
+    <div class="title">Qué tienes encendido</div>
     <div id="devices"></div>
   </div>
 
@@ -2587,7 +2592,7 @@ DASHBOARD_HTML = """<!doctype html>
     }
 
     // Tocable: cada badge togglea cargado/descargado (mismo patrón fetch que
-    // renderDevices/.device-btn de "Qué tenés encendido"), con un caso
+    // renderDevices/.device-btn de "Qué tienes encendido"), con un caso
     // especial para ecoplay — ver handler de abajo.
     function renderCargaEstado(devices) {
       const chargeable = devices.filter(dev => dev.charged != null);
@@ -2819,6 +2824,11 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                     return
                 charged = bool(body.get("charged"))
                 DEVICE_CHARGED[device] = charged
+                # Cargada implica que ya no está en uso: si estaba encendida
+                # se apaga sola, para que "Qué tienes encendido" no siga
+                # mostrándola prendida (mismo criterio que el comando /cargado).
+                if charged:
+                    DEVICE_STATE[device] = False
                 # Mismo criterio que /descargado: Ecoplay es la única con
                 # sistema de % propio, sincronizamos su % a 0 al descargarla
                 # desde acá también (ventilador/powerbank no tienen % análogo).
