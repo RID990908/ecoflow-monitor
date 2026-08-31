@@ -2112,12 +2112,6 @@ DASHBOARD_HTML = """<!doctype html>
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
   .device-btn.on .state { color: #4ade80; }
   .device-btn.off .state { color: #6b7684; }
-  .cargas { width: 100%; max-width: 380px; margin-top: 10px; }
-  .cargas .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
-  .cargas-box {
-    font-size: 14px; line-height: 1.7; color: #cbd5e1; white-space: pre-line;
-    background: #141b22; border: 1px solid #232b33; border-radius: 10px; padding: 12px 14px;
-  }
   .modal-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
     align-items: center; justify-content: center; padding: 16px; z-index: 100;
@@ -2377,17 +2371,12 @@ DASHBOARD_HTML = """<!doctype html>
 
   <div class="batteries" id="batteries"></div>
 
-  <div class="cargas" id="cargas-wrap" style="display:none">
-    <div class="title">Gestión de cargas</div>
-    <div class="cargas-box" id="cargas-box"></div>
-  </div>
-
   <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
        Solo alcanzable tocando el badge de Ecoplay en "Estado de carga"
        cuando está "descargada" (ver renderCargaEstado) — el link
        standalone "Editar % Ecoplay" que existía antes fue removido por
-       ser un trigger redundante. Reusa el estilo dark de .eta-box/
-       .cargas-box (mismo bg #141b22, radios, colores de acento) en vez de
+       ser un trigger redundante. Reusa el estilo dark de .eta-box (mismo
+       bg #141b22, radios, colores de acento) en vez de
        inventar un lenguaje visual nuevo. DOM/JS vanilla, sin framework,
        igual que el resto del dashboard. -->
   <div class="modal-backdrop" id="ecoplay-modal-backdrop">
@@ -2711,46 +2700,14 @@ DASHBOARD_HTML = """<!doctype html>
             });
             const d = await res.json();
             if (d.devices) { renderDevices(d.devices); renderCargaEstado(d.devices); }
-            if (key === 'ecoplay') loadCargas();
           } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
         });
       });
     }
 
-    // Mismo texto que manda el bot por Telegram (build_load_advisor_message),
-    // solo se reformatea el *negrita* de Telegram a <strong> para HTML.
-    function escapeHtml(s) {
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-    // La meta y el "se va a cumplir" ya se muestran arriba en la caja de eta
-    // (junto con "dura hasta las X") — acá se recortan del texto de
-    // Gestión de cargas para no repetirlas dos veces en la misma pantalla.
-    // El bot de Telegram no se toca: sigue mandando el texto completo.
-    function stripMeta(msg) {
-      const idx = msg.indexOf('\\n\\n🎯 Meta:');
-      return idx === -1 ? msg : msg.slice(0, idx);
-    }
-    async function loadCargas() {
-      try {
-        const res = await fetch('/api/cargas');
-        const d = await res.json();
-        const wrap = document.getElementById('cargas-wrap');
-        if (d.message) {
-          wrap.style.display = 'block';
-          document.getElementById('cargas-box').innerHTML =
-            escapeHtml(stripMeta(d.message)).replace(/\\*(.+?)\\*/g, '<strong>$1</strong>');
-        } else {
-          wrap.style.display = 'none';
-        }
-      } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
-    }
-
     // Modal para editar el % de Ecoplay sin pasar por Telegram (POST
-    // /api/ecoplay). Simplificado: solo entra un % y toca "Aceptar" — el
-    // cálculo (hora segura / autonomía) YA NO se muestra acá, se ve
-    // reflejado en "Gestión de cargas" en el próximo refresh (loadCargas),
-    // evitando duplicar el mismo resultado en dos lugares de la pantalla.
-    // Único trigger: el badge de Ecoplay en "Estado de carga" (ver
+    // /api/ecoplay). Simplificado: solo entra un % y toca "Aceptar". Único
+    // trigger: el badge de Ecoplay en "Estado de carga" (ver
     // renderCargaEstado) — el link standalone que existía antes fue
     // removido.
     function openEcoplayModal() {
@@ -2792,7 +2749,6 @@ DASHBOARD_HTML = """<!doctype html>
             body: JSON.stringify({ device: 'ecoplay', charged: true })
           });
         } catch (e2) { /* si falla, el próximo loadDevices() corrige la vista */ }
-        loadCargas();
         loadDevices();
         closeEcoplayModal();
       } catch (e) {
@@ -2802,11 +2758,9 @@ DASHBOARD_HTML = """<!doctype html>
 
     refresh();
     loadDevices();
-    loadCargas();
     setInterval(refresh, 2000);
     setInterval(tickClock, 1000);
     setInterval(loadDevices, 2000);
-    setInterval(loadCargas, 2000);
   </script>
 </body>
 </html>
