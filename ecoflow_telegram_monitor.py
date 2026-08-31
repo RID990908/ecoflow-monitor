@@ -2054,7 +2054,7 @@ DASHBOARD_HTML = """<!doctype html>
     // Gestión de cargas para no repetirlas dos veces en la misma pantalla.
     // El bot de Telegram no se toca: sigue mandando el texto completo.
     function stripMeta(msg) {
-      const idx = msg.indexOf('\n\n🎯 Meta:');
+      const idx = msg.indexOf('\\n\\n🎯 Meta:');
       return idx === -1 ? msg : msg.slice(0, idx);
     }
     async function loadCargas() {
