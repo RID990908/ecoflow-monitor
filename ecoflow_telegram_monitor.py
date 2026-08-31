@@ -1823,11 +1823,11 @@ DASHBOARD_HTML = """<!doctype html>
   body {
     margin: 0; min-height: 100vh; background: #0b0f14; color: #f5f5f5;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    display: flex; flex-direction: column; align-items: center; padding: 20px 16px 50px;
+    display: flex; flex-direction: column; align-items: center; padding: 20px 16px 32px;
   }
   .io-row {
     width: 100%; max-width: 380px; display: flex; justify-content: space-between;
-    align-items: flex-start; margin-bottom: 18px;
+    align-items: flex-start; margin-bottom: 12px;
   }
   .io-col .io-label { font-size: 13px; color: #6b7684; transition: color 200ms var(--ease-out); display: flex; align-items: center; gap: 4px; }
   .io-col.out .io-label { justify-content: flex-end; }
@@ -1946,7 +1946,7 @@ DASHBOARD_HTML = """<!doctype html>
   }
   .eta-goal.eta-ok { color: #4ade80; }
   .eta-goal.eta-warn { color: #f87171; }
-  .batteries { width: 100%; max-width: 380px; margin-top: 16px; }
+  .batteries { width: 100%; max-width: 380px; margin-top: 10px; }
   .battery-row {
     display: flex; justify-content: space-between; align-items: center;
     background: #141b22; border-radius: 14px; padding: 12px 16px; margin-top: 8px;
@@ -1957,7 +1957,7 @@ DASHBOARD_HTML = """<!doctype html>
   .battery-row .val.charging { color: #4ade80; }
   .battery-row .val.discharging { color: #f87171; }
   .usb-svg { flex-shrink: 0; color: #9aa4af; }
-  .devices { width: 100%; max-width: 380px; margin-top: 14px; }
+  .devices { width: 100%; max-width: 380px; margin-top: 10px; }
   .devices .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .device-btn {
     display: flex; justify-content: space-between; align-items: center; width: 100%;
@@ -1970,7 +1970,7 @@ DASHBOARD_HTML = """<!doctype html>
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
   .device-btn.on .state { color: #4ade80; }
   .device-btn.off .state { color: #6b7684; }
-  .cargas { width: 100%; max-width: 380px; margin-top: 14px; }
+  .cargas { width: 100%; max-width: 380px; margin-top: 10px; }
   .cargas .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .cargas-box {
     font-size: 14px; line-height: 1.7; color: #cbd5e1; white-space: pre-line;
@@ -2003,7 +2003,7 @@ DASHBOARD_HTML = """<!doctype html>
   .modal-result-ok { background: #14351f; color: #4ade80; }
   .modal-result-warn { background: #3a1616; color: #f87171; }
   .modal-result-error { background: #3a1616; color: #f87171; }
-  .updated { margin-top: 22px; font-size: 12px; color: #7b8794; }
+  .updated { margin-top: 14px; font-size: 12px; color: #7b8794; }
   .live-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
     background: #6b7684; margin-right: 6px; vertical-align: middle;
