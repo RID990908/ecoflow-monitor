@@ -663,13 +663,16 @@ def _ecoplay_autonomy(pct: int, now=None) -> dict:
     worst_hours = wh_available / ECOPLAY_MAX_W
     target = _next_ecoplay_target(now)
     safe_switch = target - timedelta(hours=worst_hours)
-    # Con % cerca de 0, worst_hours redondea/tiende a 0 y safe_switch colapsa
-    # sobre target (o incluso cae en el pasado si worst_hours es tan chico
-    # que target - worst_hours <= now) — no hay ventana real para pasarla a
-    # su batería propia y aguantar hasta la meta. has_autonomy marca ese
-    # caso degenerado para que el caller (mensaje de Telegram, endpoint web)
-    # no muestre una hora "válida" engañosa.
-    has_autonomy = safe_switch > now
+    # BUG (fixed): target siempre está en el futuro respecto de now (rueda
+    # al próximo 07:30 por definición de _next_ecoplay_target), así que
+    # comparar safe_switch > now es casi siempre True sin importar pct —
+    # con worst_hours=0 (pct=0), safe_switch == target, que sigue siendo
+    # > now. Eso hacía que has_autonomy diera True incluso con 0% de
+    # batería. La autonomía real depende de worst_hours (cuántas horas
+    # aguanta la batería propia al peor consumo), no de una comparación de
+    # timestamps contra target. Epsilon de 0.05h (~3min) evita falsos
+    # positivos por redondeo de punto flotante cuando pct es efectivamente 0.
+    has_autonomy = worst_hours > 0.05
     return {
         "pct": pct,
         "wh_available": round(wh_available),
@@ -2437,18 +2440,43 @@ DASHBOARD_HTML = """<!doctype html>
       });
     }
 
-    // Solo lectura: el estado de carga se marca por Telegram (/cargado,
-    // /descargado), acá no hay click handler a propósito.
+    // Tocable: cada badge togglea cargado/descargado (mismo patrón fetch que
+    // renderDevices/.device-btn de "Qué tenés encendido"), con un caso
+    // especial para ecoplay — ver handler de abajo.
     function renderCargaEstado(devices) {
       const chargeable = devices.filter(dev => dev.charged != null);
       const wrap = document.getElementById('carga-estado-wrap');
       wrap.style.display = chargeable.length ? '' : 'none';
       document.getElementById('carga-estado').innerHTML = chargeable.map(dev => `
-        <div class="device-btn ${dev.charged ? 'on' : 'off'}">
+        <div class="device-btn ${dev.charged ? 'on' : 'off'}" data-key="${dev.key}">
           <span class="name">${dev.emoji} ${dev.label}</span>
           <span class="state">${dev.charged ? '🔋 cargada' : '🪫 descargada'}</span>
         </div>
       `).join('');
+      document.querySelectorAll('#carga-estado .device-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const key = btn.dataset.key;
+          const settingCharged = !btn.classList.contains('on');
+          // Caso especial ecoplay: pasar a "cargada" abre el modal de % en
+          // vez de togglear directo (el % es la fuente de verdad real);
+          // pasar a "descargada" sí es un toggle directo (y el backend ya
+          // sincroniza ECOPLAY_LAST_PCT=0 como efecto secundario).
+          if (key === 'ecoplay' && settingCharged) {
+            openEcoplayModal();
+            return;
+          }
+          try {
+            const res = await fetch('/api/devices/charged', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ device: key, charged: settingCharged }),
+            });
+            const d = await res.json();
+            if (d.devices) { renderDevices(d.devices); renderCargaEstado(d.devices); }
+            if (key === 'ecoplay') loadCargas();
+          } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
+        });
+      });
     }
 
     // Mismo texto que manda el bot por Telegram (build_load_advisor_message),
@@ -2519,7 +2547,18 @@ DASHBOARD_HTML = """<!doctype html>
         resultBox.innerHTML = d.has_autonomy
           ? `<div class="modal-result-ok">📡 Ecoplay al ${d.pct}%: podés pasarla a su batería propia a partir de las ~${d.safe_switch_text} para que aguante hasta las ${d.target_text}.</div>`
           : `<div class="modal-result-warn">📡 Ecoplay al ${d.pct}%: no tiene autonomía como para pasarla ahora mismo y aguantar hasta las ${d.target_text} — no la cambies todavía.</div>`;
+        // Informar un % siempre implica que Ecoplay quedó "cargada" (es la
+        // fuente de verdad real del estado de carga), así que sincronizamos
+        // el badge de "Estado de carga" acá también, no solo el % interno.
+        try {
+          await fetch('/api/devices/charged', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device: 'ecoplay', charged: true })
+          });
+        } catch (e2) { /* si falla, el próximo loadDevices() corrige la vista */ }
         loadCargas();
+        loadDevices();
+        setTimeout(closeEcoplayModal, 900);
       } catch (e) {
         resultBox.innerHTML = '<div class="modal-result-error">No se pudo conectar con el servidor.</div>';
       }
