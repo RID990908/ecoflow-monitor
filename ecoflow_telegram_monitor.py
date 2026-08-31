@@ -1904,6 +1904,7 @@ DASHBOARD_HTML = """<!doctype html>
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt; stroke-width: 2.5;
     animation-name: flow-dash-lateral !important;
+    animation-duration: 1.9s !important;
   }
   #flow-lateral-charge, #flow-lateral-discharge { stroke-width: 2.5; }
   @keyframes flow-dash-lateral { to { stroke-dashoffset: -126; } }
@@ -2132,8 +2133,8 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
     <div class="lateral-overlay">
-      <svg class="flow-connectors lateral" width="18" height="58" viewBox="0 0 18 58">
-        <path d="M 0,0 L 10,0 Q 14,0 14,4 L 14,54" fill="none" stroke="#232c36" stroke-width="2"/>
+      <svg class="flow-connectors lateral" width="30" height="96" viewBox="0 0 30 96">
+        <path d="M 0,0 L 20,0 Q 28,0 28,8 L 28,90" fill="none" stroke="#232c36" stroke-width="2"/>
         <path id="flow-lateral-charge" class="flow-overlay" d="M 0,0 L 20,0 Q 28,0 28,8 L 28,90"/>
         <path id="flow-lateral-discharge" class="flow-overlay" d="M 28,90 L 28,8 Q 28,0 20,0 L 0,0"/>
       </svg>
