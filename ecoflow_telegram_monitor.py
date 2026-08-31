@@ -697,12 +697,16 @@ def _gather_metrics(passive: bool = False) -> dict:
     seguido)."""
     data = get_device_quota_cached(SN_DELTA2) if passive else get_device_quota(SN_DELTA2)
 
+    def _nf(v):
+        return int(v) if v is not None and v > NOISE_FLOOR_W else 0
+
     soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     soc_extra = get_extra_battery_soc(data)
     extra_in_w = _pick(data, "bms_slave.inputWatts")
     extra_out_w = _pick(data, "bms_slave.outputWatts")
     pv_w = get_pv_watts(data)
     out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
+    ac_out_w_raw = _pick(data, "inv.outputWatts")
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
@@ -713,6 +717,7 @@ def _gather_metrics(passive: bool = False) -> dict:
     delta2_net_w = total_in_w - out_w
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
     system_net_w = delta2_net_w + (extra_net_w or 0)
+    extra_in_w_nf = _nf(extra_in_w)
     ac_present = get_ac_present(data)
     ac_w, _ = classify_ac_and_battery_watts(data, pv_w)
     source_verb, source_emoji = _charge_source(pv_w, ac_present, ac_w, system_net_w)
@@ -763,7 +768,20 @@ def _gather_metrics(passive: bool = False) -> dict:
         ("USB-A", _pick(data, "pd.usb2Watts")),
         ("Auto (12V)", _pick(data, "pd.carWatts")),
     ]
-    active_ports = [{"name": name, "watts": w} for name, w in ports if w]
+    active_ports = [{"name": name, "watts": w} for name, w in ports if w and w > NOISE_FLOOR_W]
+
+    ac_out_w = _nf(ac_out_w_raw)
+    log.info(
+        "[DEBUG-R1-VERIFY] inv.outputWatts(raw)=%s vs out_w(pd.wattsOutSum/fallback)=%s",
+        ac_out_w_raw,
+        out_w,
+    )
+    usb_out_w = _nf(
+        (_pick(data, "pd.typec1Watts") or 0)
+        + (_pick(data, "pd.typec2Watts") or 0)
+        + (_pick(data, "pd.usb1Watts") or 0)
+        + (_pick(data, "pd.usb2Watts") or 0)
+    )
 
     return {
         "soc_delta2": soc_delta2,
@@ -782,6 +800,9 @@ def _gather_metrics(passive: bool = False) -> dict:
         "remain": remain,
         "threshold_line": threshold_line,
         "ports": active_ports,
+        "ac_out_w": ac_out_w,
+        "extra_in_w": extra_in_w_nf,
+        "usb_out_w": usb_out_w,
     }
 
 
@@ -1701,6 +1722,9 @@ def get_dashboard_status() -> dict:
         "threshold_pct": BATTERY_LOW_THRESHOLD,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         "ports": m["ports"],
+        "ac_out_w": m["ac_out_w"] or 0,
+        "extra_in_w": m["extra_in_w"] or 0,
+        "usb_out_w": m["usb_out_w"] or 0,
         "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
         "stale": is_stale,
         "stale_minutes": stale_minutes,
