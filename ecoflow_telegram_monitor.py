@@ -1873,6 +1873,11 @@ DASHBOARD_HTML = """<!doctype html>
     display: flex; align-items: center;
   }
   .flow-connectors.lateral { flex-shrink: 0; overflow: visible; }
+  .flow-connectors.lateral .flow-overlay {
+    stroke-dasharray: 3 4; stroke-linecap: butt;
+    animation-name: flow-dash-lateral !important;
+  }
+  @keyframes flow-dash-lateral { to { stroke-dashoffset: -14; } }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
