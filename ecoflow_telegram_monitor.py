@@ -1854,10 +1854,23 @@ DASHBOARD_HTML = """<!doctype html>
   .batt-icon.batt-green { color: #4ade80; }
   .batt-icon.batt-red { color: #f87171; }
   .batt-icon.batt-gray { color: #6b7684; }
-  .ring-wrap { position: relative; width: 240px; height: 240px; margin: 6px 0 8px; }
+  /* RING SIZE: shrunk from 240px to 190px (-21%) so the ring + lateral
+     battery node (connector + icon) always fits inside a narrow Telegram
+     Mini App content width. See the .ring-row GEOMETRY SPEC below for the
+     full fit-check arithmetic. .pct/.pct-sub/.dur font sizes below are
+     scaled down proportionally (x0.79) to match, so the center text stays
+     legible instead of looking cramped inside the smaller circle. */
+  .ring-wrap { position: relative; width: 190px; height: 190px; flex-shrink: 0; }
+  /* .ring-row wraps .ring-wrap + .lateral-wrap as ONE flex-centered unit
+     (instead of the old approach where .ring-wrap centered alone via the
+     body's flex column and .lateral-wrap broke out of it with
+     position:absolute). That old approach wasted half its safety margin
+     symmetrically on the ring's LEFT side, where the lateral node never
+     appears — see GEOMETRY SPEC on .lateral-wrap below for the fit math. */
+  .ring-row { display: flex; align-items: center; justify-content: center; width: 100%; max-width: 380px; margin: 6px auto 8px; }
   .flow-top-wrap { position: relative; width: 300px; max-width: 100%; margin: 0 auto 4px; padding-bottom: 122px; }
   .flow-bottom-wrap { position: relative; width: 300px; max-width: 100%; margin: 4px auto 0; padding-top: 122px; }
-  .flow-connectors { position: absolute; left: 0; width: 300px; height: 130px; pointer-events: none; top: 0; }
+  .flow-connectors { position: absolute; left: 0; width: 100%; height: 130px; pointer-events: none; top: 0; }
   .flow-connectors.top { top: auto; bottom: 0; }
   .flow-overlay {
     fill: none; stroke: #4ade80; stroke-width: 2; stroke-linecap: round;
@@ -1866,18 +1879,28 @@ DASHBOARD_HTML = """<!doctype html>
   #flow-ac-out.flow-overlay, #flow-usb-out.flow-overlay, #flow-lateral-discharge.flow-overlay { stroke: #f87171; }
   .flow-overlay.active { opacity: 1; animation: flow-dash 1.1s linear infinite; }
   @keyframes flow-dash { to { stroke-dashoffset: -16; } }
-  .icons-row.top { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
-  .icons-row.bottom { width: 300px; max-width: 300px; margin: 0 auto; margin-bottom: 0; }
-  .lateral-wrap {
-    position: absolute; top: 50%; left: 240px; transform: translateY(-50%);
-    display: flex; align-items: center;
-  }
+  /* width:300px + max-width:100% (NOT a fixed 300px) so these rows shrink
+     on real narrow viewports instead of silently overflowing past the
+     visible edge — same responsive pattern already used by
+     .flow-top-wrap/.flow-bottom-wrap above. */
+  .icons-row.top { width: 300px; max-width: 100%; margin: 0 auto; margin-bottom: 0; }
+  .icons-row.bottom { width: 300px; max-width: 100%; margin: 0 auto; margin-bottom: 0; }
+  .lateral-wrap { display: flex; align-items: center; flex-shrink: 0; }
   .flow-connectors.lateral { flex-shrink: 0; overflow: visible; }
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt;
     animation-name: flow-dash-lateral !important;
   }
   @keyframes flow-dash-lateral { to { stroke-dashoffset: -14; } }
+  /* Compact variant of .icon-item, used ONLY by the lateral battery node.
+     Narrower (56px vs 84px) with a smaller circle/text so the node's total
+     footprint (ring + connector + icon) stays well inside a narrow
+     Telegram Mini App content width — see fit-check arithmetic in the
+     GEOMETRY SPEC comment above .ring-row in the HTML below. */
+  .icon-item.lateral-icon { width: 56px; }
+  .icon-item.lateral-icon .icon-circle { width: 40px; height: 40px; font-size: 17px; }
+  .icon-item.lateral-icon .icon-watts { font-size: 11px; margin-top: 3px; }
+  .icon-item.lateral-icon .icon-name { font-size: 9px; }
   .ring {
     width: 100%; height: 100%; border-radius: 50%;
     background: conic-gradient(var(--ring-color, #22c55e) calc(var(--pct, 0) * 1%), #1c232b 0);
@@ -1888,9 +1911,9 @@ DASHBOARD_HTML = """<!doctype html>
     width: 80%; height: 80%; border-radius: 50%; background: #0b0f14;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
   }
-  .pct { font-size: 48px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-  .pct-sub { font-size: 13px; color: #9aa4af; margin-top: 8px; text-align: center; }
-  .pct-sub .dur { font-size: 22px; color: #e5e7eb; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .pct { font-size: 38px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .pct-sub { font-size: 11px; color: #9aa4af; margin-top: 6px; text-align: center; }
+  .pct-sub .dur { font-size: 18px; color: #e5e7eb; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
   .eta-box {
     margin-top: 4px; padding: 14px 22px; border-radius: 16px; background: #141b22;
     text-align: center; max-width: 340px; width: 100%;
@@ -2028,56 +2051,70 @@ DASHBOARD_HTML = """<!doctype html>
     </svg>
   </div>
 
-  <!-- GEOMETRY SPEC (lateral node, consolidated Extra+Batería):
-       .ring-wrap is 240x240 (position:relative). .lateral-wrap is
-       position:absolute inside it: left:240px (= ring's right edge, local
-       x=240 in ring-wrap's own box), top:50% + translateY(-50%) (= ring's
-       vertical center, local y=120). It holds a STRAIGHT horizontal
-       connector (48px wide 2px SVG line, viewBox 0 0 48 4, "M 0,2 L 48,2")
-       followed by one .icon-item (84px, same as other nodes). Absolute
-       total footprint from ring-wrap's local origin: connector spans local
-       x=[240,288] y=120, icon-item center approx local x=330 y=120. Only
-       ONE of extra_in_w/extra_out_w is ever nonzero at a time (confirmed
-       reliable in production) so two separate direction paths
-       (flow-lateral-charge = ring->node, flow-lateral-discharge =
-       node->ring) are toggled active/inactive instead of rewriting `d` at
-       runtime, matching the existing top/bottom-row per-direction-path
-       convention (see DIRECTION note above .flow-bottom-wrap).
-       LENGTH FIX (this batch): the connector already had a base muted
-       path (`stroke:#232c36`, same style as every other connector's base
-       path, e.g. the top/bottom manifold paths below) always visible
-       underneath the two animated overlays — that part was NOT the bug.
-       The actual root cause was the tiny 24px-long viewBox (0 0 24 4):
-       .flow-overlay's `stroke-dasharray: 6 10` (16-unit cycle) with
-       `stroke-linecap: round` needs real room to read as a flowing dashed
-       line, and at 24 units (barely 1.5 cycles) both the base line and the
-       animated overlay rendered as a single fat rounded blob next to the
-       52px icon circle instead of a proper line. Fixed by widening the
-       line to 48px = exactly 3 full dash-cycles (3 x 16 = 48), long enough
-       for the dash pattern to read as an actual flowing line instead of a
-       blob — same fix philosophy as the existing elbow connectors (~114-120
-       units long, 7+ cycles), just scaled down proportionally for this much
-       shorter connector. RISK: on narrow viewports (<~400px content width)
-       the lateral node can overflow past the right edge since it breaks
-       out of ring-wrap's own 240px box (widening the connector by +24px
-       this batch makes that slightly worse) — no browser/simulator
-       available in this session to visually confirm; flag for manual
-       check. KEEP IN SYNC WITH App.tsx lateral connector Svg (and
-       vice-versa). -->
-  <div class="ring-wrap">
-    <div class="ring" id="ring">
-      <div class="ring-inner">
-        <div class="pct" id="pct">--%</div>
-        <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
+  <!-- GEOMETRY SPEC (lateral node, consolidated Extra+Batería) — REWRITTEN
+       this batch to fix two real production bugs found on an actual
+       Telegram Mini App device (narrower usable CSS width than assumed
+       during development), plus a visual-consistency request:
+
+       BUG 1 — clipping. Root cause: .ring-wrap used to center itself alone
+       inside the body's flex column, and .lateral-wrap broke OUT of it via
+       position:absolute (left:240px = old ring's right edge). That design
+       requires the ring to have EQUAL free margin on both its left and
+       right for centering to work, but the lateral node only ever exists
+       on the right — so half of the available narrow-viewport width was
+       being wasted on a left margin nothing used, while the right side
+       (which actually needs the room) got starved and clipped.
+       FIX: ring shrunk 240px -> 190px (see .ring-wrap comment above in
+       <style>), AND .ring-wrap + .lateral-wrap are now wrapped together in
+       a single flex row (.ring-row, width:100% max-width:380px,
+       justify-content:center) so the ring+connector+icon are centered as
+       ONE unit — the whole composite width counts against the available
+       content width once, not the ring's width doubled.
+       Fit-check arithmetic (content width = viewport width - 32px body
+       padding): composite footprint = ring(190) + connector(21, see BUG 2
+       below) + lateral-icon(56, new .lateral-icon compact class) = 267px.
+         320px viewport -> 288px content -> 21px spare
+         360px viewport -> 328px content -> 61px spare
+         375px viewport -> 343px content -> 76px spare
+       All comfortably positive — no clipping down to a 320px-wide device.
+
+       BUG 2 — connector didn't match the elbow/rounded-corner visual
+       language of every other connector (flow-ac-top/flow-solar-top/
+       flow-ac-out/flow-usb-out all use straight-Q-corner-straight paths).
+       FIX: replaced the flat straight stub with a short symmetric elbow
+       bump using two Q quarter-corners (same technique as the other
+       connectors, just scaled down + horizontal instead of vertical):
+       viewBox 0 0 21 12, path "M 0,6 L 5,6 Q 9,6 9,9 L 13,9 Q 17,9 17,6
+       L 21,6" — dips down 3px and back up via two rounded corners, start
+       and end both at y=6 so it still connects cleanly to the
+       vertically-centered ring/icon. 21 units = exactly 3 full
+       stroke-dasharray cycles (dasharray "3 4" = 7-unit cycle, kept from
+       the previous batch along with stroke-linecap:butt), so the dashed
+       flow animation reads as a real line, not a blob (same reasoning as
+       the prior length fix, re-applied to the new shape/length).
+       flow-lateral-discharge's `d` is the exact reverse point sequence
+       (21,6 -> 17,6 -> Q17,9 13,9 -> 9,9 -> Q9,6 5,6 -> 0,6) so the
+       charge/discharge animations flow in opposite visual directions,
+       matching the existing per-direction-path convention (see DIRECTION
+       note above .flow-bottom-wrap). Only ONE of extra_in_w/extra_out_w
+       is ever nonzero at a time (confirmed reliable in production).
+       KEEP IN SYNC WITH App.tsx lateral connector Svg (and vice-versa). -->
+  <div class="ring-row">
+    <div class="ring-wrap">
+      <div class="ring" id="ring">
+        <div class="ring-inner">
+          <div class="pct" id="pct">--%</div>
+          <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
+        </div>
       </div>
     </div>
     <div class="lateral-wrap">
-      <svg class="flow-connectors lateral" width="48" height="4" viewBox="0 0 48 4">
-        <path d="M 0,2 L 48,2" fill="none" stroke="#232c36" stroke-width="2"/>
-        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,2 L 48,2"/>
-        <path id="flow-lateral-discharge" class="flow-overlay" d="M 48,2 L 0,2"/>
+      <svg class="flow-connectors lateral" width="21" height="12" viewBox="0 0 21 12">
+        <path d="M 0,6 L 5,6 Q 9,6 9,9 L 13,9 Q 17,9 17,6 L 21,6" fill="none" stroke="#232c36" stroke-width="2"/>
+        <path id="flow-lateral-charge" class="flow-overlay" d="M 0,6 L 5,6 Q 9,6 9,9 L 13,9 Q 17,9 17,6 L 21,6"/>
+        <path id="flow-lateral-discharge" class="flow-overlay" d="M 21,6 L 17,6 Q 17,9 13,9 L 9,9 Q 9,6 5,6 L 0,6"/>
       </svg>
-      <div class="icon-item">
+      <div class="icon-item lateral-icon">
         <div class="icon-circle" id="lateral-circle">🔋</div>
         <div class="icon-watts" id="lateral-w">0 W</div>
         <div class="icon-name">Batería</div>
