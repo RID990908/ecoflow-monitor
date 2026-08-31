@@ -145,6 +145,7 @@ def _save_persisted_state() -> None:
                     "was_full": WAS_FULL,
                     "last_ac_timestamp": LAST_AC_TIMESTAMP,
                     "device_state": DEVICE_STATE,
+                    "device_charged": DEVICE_CHARGED,
                     "ecoplay_pct": ECOPLAY_LAST_PCT,
                 },
                 f,
@@ -161,6 +162,12 @@ WAS_FULL = _persisted.get("was_full", False)
 LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 _saved_device_state = _persisted.get("device_state", {})
 DEVICE_STATE = {key: bool(_saved_device_state.get(key, False)) for key in DEVICE_INFO}
+_saved_device_charged = _persisted.get("device_charged", {})
+DEVICE_CHARGED = {
+    f"{b}{i}": bool(_saved_device_charged.get(f"{b}{i}", False))
+    for b, (c, *_r) in MULTI_UNIT_DEVICES.items()
+    for i in range(1, c + 1)
+}
 ECOPLAY_LAST_PCT = _persisted.get("ecoplay_pct")
 _DATA_STALE_ALERTED = False
 
@@ -878,6 +885,9 @@ HELP_TEXT = (
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
     "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, tv, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
+    "/cargado <ventilador/powerbank> — marcar esa(s) unidad(es) como cargada, para priorizar "
+    "el resto en el próximo reparto de excedente (ej: /cargado ventilador1 ventilador2)\n"
+    "/descargado <ventilador/powerbank> — marcarla como descargada (prioridad para recibir carga)\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/ecoplay <porcentaje> — hasta qué hora aguanta la batería propia de la Ecoplay/WiFi "
     "(35-45 W) para llegar a las 7:30 AM (ej: /ecoplay 86)\n"
@@ -959,6 +969,27 @@ def handle_command(text: str, chat_id: str) -> None:
                 _save_persisted_state()
                 lines = [f"{DEVICE_INFO[k]['emoji']} {DEVICE_INFO[k]['label']}: marcado {estado}" for k in keys]
                 send_telegram("\n".join(lines), chat_id=chat_id)
+    elif cmd in ("/cargado", "/descargado"):
+        if len(parts) < 2:
+            send_telegram(f"Uso: {cmd} <dispositivo> — {', '.join(DEVICE_CHARGED)}", chat_id=chat_id)
+        else:
+            resolved, invalid = [], []
+            for w in parts[1:]:
+                valid = [k for k in _resolve_device_keys(w) if k in DEVICE_CHARGED]
+                (resolved.extend(valid) if valid else invalid.append(w))
+            em = "🔋" if cmd == "/cargado" else "🪫"
+            estado = "cargada" if cmd == "/cargado" else "descargada"
+            lines = []
+            if resolved:
+                for k in resolved:
+                    DEVICE_CHARGED[k] = cmd == "/cargado"
+                _save_persisted_state()
+                lines.extend(f"{em} {DEVICE_INFO[k]['label']}: {estado}" for k in resolved)
+            if invalid:
+                lines.append(
+                    f"No reconozco / no es multi-unidad: {', '.join(invalid)}. Solo: {', '.join(DEVICE_CHARGED)}"
+                )
+            send_telegram("\n".join(lines), chat_id=chat_id)
     elif cmd == "/ecoplay":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /ecoplay <porcentaje entre 0 y 100>, ej: /ecoplay 86", chat_id=chat_id)
@@ -1326,14 +1357,16 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
     sistema, es lo que queda para ESTA carga en particular."""
     original_available = max(0, available_w) if available_w is not None else 0
     remaining = original_available
-    dots = []
-    for key in device_keys:
+    priority = sorted(device_keys, key=lambda k: DEVICE_CHARGED.get(k, False))
+    dot_by_key = {}
+    for key in priority:
         watts = DEVICE_INFO[key]["watts"]
         if watts <= remaining:
-            dots.append("🟢")
+            dot_by_key[key] = "🟢"
             remaining -= watts
         else:
-            dots.append("🔴")
+            dot_by_key[key] = "🔴"
+    dots = [dot_by_key[key] for key in device_keys]  # render in original order
     on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
     if on_count == len(device_keys):
         dots_str = " ".join(dots) + " ✅"
@@ -1656,7 +1689,14 @@ PORT = int(os.environ.get("PORT", "8080"))
 def get_device_state_payload() -> dict:
     return {
         "devices": [
-            {"key": key, "label": info["label"], "emoji": info["emoji"], "watts": info["watts"], "on": DEVICE_STATE[key]}
+            {
+                "key": key,
+                "label": info["label"],
+                "emoji": info["emoji"],
+                "watts": info["watts"],
+                "on": DEVICE_STATE[key],
+                "charged": DEVICE_CHARGED.get(key),
+            }
             for key, info in DEVICE_INFO.items()
         ]
     }
@@ -1985,6 +2025,11 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="cargas-box" id="cargas-box"></div>
   </div>
 
+  <div class="devices" id="carga-estado-wrap" style="display:none">
+    <div class="title">Estado de carga</div>
+    <div id="carga-estado"></div>
+  </div>
+
   <div class="devices">
     <div class="title">Qué tenés encendido</div>
     <div id="devices"></div>
@@ -2195,6 +2240,7 @@ DASHBOARD_HTML = """<!doctype html>
         const res = await fetch('/api/devices');
         const d = await res.json();
         renderDevices(d.devices);
+        renderCargaEstado(d.devices);
       } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
     }
 
@@ -2216,10 +2262,24 @@ DASHBOARD_HTML = """<!doctype html>
               body: JSON.stringify({ device: key, on: turningOn }),
             });
             const d = await res.json();
-            if (d.devices) renderDevices(d.devices);
+            if (d.devices) { renderDevices(d.devices); renderCargaEstado(d.devices); }
           } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
         });
       });
+    }
+
+    // Solo lectura: el estado de carga se marca por Telegram (/cargado,
+    // /descargado), acá no hay click handler a propósito.
+    function renderCargaEstado(devices) {
+      const chargeable = devices.filter(dev => dev.charged != null);
+      const wrap = document.getElementById('carga-estado-wrap');
+      wrap.style.display = chargeable.length ? '' : 'none';
+      document.getElementById('carga-estado').innerHTML = chargeable.map(dev => `
+        <div class="device-btn ${dev.charged ? 'on' : 'off'}">
+          <span class="name">${dev.emoji} ${dev.label}</span>
+          <span class="state">${dev.charged ? '🔋 cargada' : '🪫 descargada'}</span>
+        </div>
+      `).join('');
     }
 
     // Mismo texto que manda el bot por Telegram (build_load_advisor_message),
