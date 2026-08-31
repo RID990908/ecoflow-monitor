@@ -2085,8 +2085,13 @@ DASHBOARD_HTML = """<!doctype html>
        center column's own elements naturally use (row 1 = io-row-sized,
        row 2 = flow-top-wrap-sized, etc.) — no row is forced taller than
        the center column actually needs. */
-    .batteries, #carga-estado-wrap { grid-row: 1; }
-    .cargas, .devices-panel-right { grid-row: 2; }
+    /* NOT row 1 — .batteries/#carga-estado-wrap (~150-300px) are taller
+       than .io-row alone (~60px) and would inflate row 1, pushing the
+       AC/Solar icon row (row 2) down and creating a gap right under the
+       header. Row 2 (flow-top-wrap, ~250px w/ curve padding) already
+       needs to be tall, so sharing it there costs nothing extra. */
+    .batteries, #carga-estado-wrap { grid-row: 2; }
+    .cargas, .devices-panel-right { grid-row: 3; }
     .batteries, .cargas { grid-column: 1; }
     #carga-estado-wrap, .devices-panel-right { grid-column: 3; }
     .batteries, .cargas, #carga-estado-wrap, .devices-panel-right {
