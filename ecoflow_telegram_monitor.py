@@ -1904,10 +1904,10 @@ DASHBOARD_HTML = """<!doctype html>
   .flow-connectors.lateral .flow-overlay {
     stroke-dasharray: 3 4; stroke-linecap: butt; stroke-width: 2.5;
     animation-name: flow-dash-lateral !important;
-    animation-duration: 2.4s !important;
+    animation-duration: 0.96s !important;
   }
   #flow-lateral-charge, #flow-lateral-discharge { stroke-width: 2.5; }
-  @keyframes flow-dash-lateral { to { stroke-dashoffset: -147; } }
+  @keyframes flow-dash-lateral { to { stroke-dashoffset: -14; } }
   /* Compact variant of .icon-item, used ONLY by the lateral battery node.
      Narrower (56px vs 84px) with a smaller circle/text so the overlay's
      own icon footprint stays small — see fit-check arithmetic in the
