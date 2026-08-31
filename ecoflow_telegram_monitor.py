@@ -1402,23 +1402,27 @@ def _multi_unit_fits(device_keys: list, available_w) -> tuple:
     DEVICE_CHARGED, es la redirección de excedente hacia lo descargado) y va
     descontando el watiaje de cada unidad del excedente disponible en ese
     orden. Devuelve (dict[key, bool] de si esa unidad entra ahora mismo,
-    excedente restante para lo que venga después en la cadena de prioridad).
-    Separado de _multi_unit_line para que _compute_device_fits (el punto
-    🟢/🔴 que se pega a cada fila de "Qué tienes encendido") pueda reusar
-    exactamente esta misma asignación sin duplicar el orden/sorteo — si esto
-    cambia, tanto el texto de Gestión de cargas como el punto por fila
-    quedan consistentes automáticamente."""
+    dict[key, int] de cuánto le falta si NO entra (0 si entra), excedente
+    restante para lo que venga después en la cadena de prioridad). Separado
+    de _multi_unit_line para que _compute_device_fits (el punto 🟢/🔴 y el
+    déficit en W que se pegan a cada fila de "Qué tienes encendido") pueda
+    reusar exactamente esta misma asignación sin duplicar el orden/sorteo —
+    si esto cambia, tanto el mensaje del bot como el punto por fila quedan
+    consistentes automáticamente."""
     remaining = max(0, available_w) if available_w is not None else 0
     priority = sorted(device_keys, key=lambda k: DEVICE_CHARGED.get(k, False))
     fit_by_key = {}
+    deficit_by_key = {}
     for key in priority:
         watts = DEVICE_INFO[key]["watts"]
         if watts <= remaining:
             fit_by_key[key] = True
+            deficit_by_key[key] = 0
             remaining -= watts
         else:
             fit_by_key[key] = False
-    return fit_by_key, remaining
+            deficit_by_key[key] = round(watts - remaining)
+    return fit_by_key, deficit_by_key, remaining
 
 
 def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> tuple:
@@ -1439,7 +1443,7 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
     mayor prioridad (ver _allocate_budget) — no es el excedente total del
     sistema, es lo que queda para ESTA carga en particular."""
     original_available = max(0, available_w) if available_w is not None else 0
-    fit_by_key, remaining = _multi_unit_fits(device_keys, original_available)
+    fit_by_key, _deficit_by_key, remaining = _multi_unit_fits(device_keys, original_available)
     dot_by_key = {k: ("🟢" if fit_by_key[k] else "🔴") for k in device_keys}
     dots = [dot_by_key[key] for key in device_keys]  # render in original order
     on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
@@ -1508,15 +1512,16 @@ def _laptop_deprioritized(now=None) -> bool:
 
 
 def _compute_device_fits(m: dict = None, now=None) -> dict:
-    """Único cálculo de fondo para el punto 🟢/🔴 por dispositivo: corre la
-    MISMA cadena de prioridad/orden que build_load_advisor_message (Nevera >
-    Laptop > Ventilador > Power bank > Ecoplay, con el reordenamiento
-    nocturno de _laptop_deprioritized), pero devuelve un dict plano
-    {device_key: bool} en vez de armar texto. Se usa para pegar el punto de
-    "Gestión de cargas" directo en cada fila de "Qué tienes encendido" (ver
-    get_device_state_payload) sin mantener una segunda cuenta de excedente
-    aparte — misma fuente de verdad que el mensaje de Telegram/dashboard, así
-    nunca pueden mostrar resultados distintos entre sí.
+    """Único cálculo de fondo para el punto 🟢/🔴 y el déficit en W por
+    dispositivo: corre la MISMA cadena de prioridad/orden que
+    build_load_advisor_message (Nevera > Laptop > Ventilador > Power bank >
+    Ecoplay, con el reordenamiento nocturno de _laptop_deprioritized), pero
+    devuelve un dict plano {device_key: {"fits": bool, "deficit_w": int}} en
+    vez de armar texto. Se usa para pegar el punto y el déficit directo en
+    cada fila de "Qué tienes encendido" (ver get_device_state_payload) sin
+    mantener una segunda cuenta de excedente aparte — misma fuente de verdad
+    que el mensaje de Telegram/dashboard, así nunca pueden mostrar
+    resultados distintos entre sí.
 
     OJO: la SECUENCIA de asignación (quién pide primero) está escrita acá de
     nuevo en vez de compartir una sola función con build_load_advisor_message
@@ -1528,38 +1533,47 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
     now = now or datetime.now(TZ)
     if m is None:
         m = _gather_metrics(passive=True)
-    fits = {key: True for key in DEVICE_INFO}
+    fits = {key: {"fits": True, "deficit_w": 0} for key in DEVICE_INFO}
     block = _current_load_block(now)
     if block is None:
         return fits
     emergency = block["nevera"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
     if emergency:
         for key in DEVICE_INFO:
-            fits[key] = key == "nevera"
+            ok = key == "nevera"
+            fits[key] = {"fits": ok, "deficit_w": 0 if ok else DEVICE_INFO[key]["watts"]}
         return fits
     nevera_ok, _nevera_detail = _nevera_status(block["nevera"])
-    fits["nevera"] = nevera_ok
+    fits["nevera"] = {"fits": nevera_ok, "deficit_w": 0}
     available = m["system_net_w"]
 
     def _laptop_fits(available_w):
-        ok, _detail, remaining = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available_w)
-        return ok, remaining
+        watts = DEVICE_INFO["laptop"]["watts"]
+        ok, _detail, remaining = _allocate_budget(watts, available_w)
+        info = {"fits": ok, "deficit_w": 0 if ok else round(watts - remaining)}
+        return info, remaining
 
     def _ecoplay_fits(available_w):
-        ok, _detail, remaining = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available_w)
-        return ok, remaining
+        watts = DEVICE_INFO["ecoplay"]["watts"]
+        ok, _detail, remaining = _allocate_budget(watts, available_w)
+        info = {"fits": ok, "deficit_w": 0 if ok else round(watts - remaining)}
+        return info, remaining
+
+    def _multi_unit_fit_info(device_keys, available_w):
+        fit_by_key, deficit_by_key, remaining = _multi_unit_fits(device_keys, available_w)
+        return {k: {"fits": fit_by_key[k], "deficit_w": deficit_by_key[k]} for k in device_keys}, remaining
 
     if _laptop_deprioritized(now):
-        vent_fits, available = _multi_unit_fits(VENTILADOR_DEVICE_KEYS, available)
-        pb_fits, available = _multi_unit_fits(POWERBANK_DEVICE_KEYS, available)
+        vent_fits, available = _multi_unit_fit_info(VENTILADOR_DEVICE_KEYS, available)
+        pb_fits, available = _multi_unit_fit_info(POWERBANK_DEVICE_KEYS, available)
         fits.update(vent_fits)
         fits.update(pb_fits)
         fits["ecoplay"], available = _ecoplay_fits(available)
         fits["laptop"], available = _laptop_fits(available)
     else:
         fits["laptop"], available = _laptop_fits(available)
-        vent_fits, available = _multi_unit_fits(VENTILADOR_DEVICE_KEYS, available)
-        pb_fits, available = _multi_unit_fits(POWERBANK_DEVICE_KEYS, available)
+        vent_fits, available = _multi_unit_fit_info(VENTILADOR_DEVICE_KEYS, available)
+        pb_fits, available = _multi_unit_fit_info(POWERBANK_DEVICE_KEYS, available)
         fits.update(vent_fits)
         fits.update(pb_fits)
         fits["ecoplay"], available = _ecoplay_fits(available)
@@ -1850,11 +1864,12 @@ PORT = int(os.environ.get("PORT", "8080"))
 
 
 def get_device_state_payload() -> dict:
-    # fits: mismo punto 🟢/🔴 que "Gestión de cargas" (ver _compute_device_fits),
-    # pegado directo a cada dispositivo acá para que el frontend (web+Expo)
-    # no tenga que cruzar dos listas separadas para saber "está prendido" y
-    # "me lo puedo permitir" — pasive=True porque este endpoint lo pollean
-    # cada 2s, no puede forzar una consulta activa al EcoFlow (ver /api/cargas).
+    # fits/deficit_w: mismo punto 🟢/🔴 y déficit en W que build_load_advisor_message
+    # (ver _compute_device_fits), pegados directo a cada dispositivo acá para
+    # que el frontend (web+Expo) no tenga que cruzar dos listas separadas
+    # para saber "está prendido" y "me lo puedo permitir" — pasive=True
+    # porque este endpoint lo pollean cada 2s, no puede forzar una consulta
+    # activa al EcoFlow (ver /api/cargas).
     fits = _compute_device_fits(_gather_metrics(passive=True)) if ECOFLOW_READY else {}
     # note: subtexto opcional bajo la fila del dispositivo en "Estado de
     # carga" — hoy solo Ecoplay lo usa (autonomía de su batería propia, el
@@ -1869,7 +1884,8 @@ def get_device_state_payload() -> dict:
                 "watts": info["watts"],
                 "on": DEVICE_STATE[key],
                 "charged": DEVICE_CHARGED.get(key),
-                "fits": fits.get(key),
+                "fits": fits.get(key, {}).get("fits"),
+                "deficit_w": fits.get(key, {}).get("deficit_w", 0),
                 "note": ecoplay_note if key == "ecoplay" else None,
             }
             for key, info in DEVICE_INFO.items()
@@ -2126,6 +2142,7 @@ DASHBOARD_HTML = """<!doctype html>
   .device-btn .name { display: flex; align-items: center; gap: 8px; }
   .device-btn .name .sub { font-size: 12px; color: #6b7684; font-weight: 400; }
   .fit-dot { font-size: 11px; }
+  .deficit { color: #f87171; font-weight: 700; font-size: 12px; }
   .device-btn .state { font-weight: 700; font-size: 12px; letter-spacing: 0.03em; }
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
   .device-btn.on .state { color: #4ade80; }
@@ -2661,10 +2678,16 @@ DASHBOARD_HTML = """<!doctype html>
     function fitDot(dev) {
       return dev.fits == null ? '' : `<span class="fit-dot" title="${dev.fits ? 'Entra en el excedente actual' : 'No entra en el excedente actual'}">${dev.fits ? '🟢' : '🔴'}</span>`;
     }
+    // Déficit en W: solo tiene sentido mostrarlo si el dispositivo está
+    // prendido de verdad Y no entra en el excedente (si está apagado, el
+    // déficit es hipotético y no hace falta ensuciar la fila con eso).
+    function deficitText(dev) {
+      return dev.on && dev.fits === false && dev.deficit_w ? ` <span class="deficit">(-${dev.deficit_w}W)</span>` : '';
+    }
     function renderDevices(devices) {
       document.getElementById('devices').innerHTML = devices.map(dev => `
         <div class="device-btn ${dev.on ? 'on' : 'off'}" data-key="${dev.key}">
-          <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W</span>
+          <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W${deficitText(dev)}</span>
           <span class="state">${dev.on ? 'ON' : 'OFF'}</span>
         </div>
       `).join('');
