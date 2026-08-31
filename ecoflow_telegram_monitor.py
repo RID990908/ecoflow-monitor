@@ -81,10 +81,18 @@ QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
 QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "7"))
 QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
 
-# Hora hasta la que debería aguantar la Ecoplay si se la deja prendida de
-# noche (ver /ecoplay). Se puede pisar por chat con /ecoplay HH:MM.
+# Hora hasta la que debería aguantar la Ecoplay si se la pasa a su batería
+# propia de noche (ver /ecoplay). Se puede pisar por chat con /ecoplay <%> HH:MM.
 ECOPLAY_TARGET_HOUR = int(os.environ.get("ECOPLAY_TARGET_HOUR", "7"))
 ECOPLAY_TARGET_MINUTE = int(os.environ.get("ECOPLAY_TARGET_MINUTE", "30"))
+
+# La Ecoplay tiene su propia batería (un UPS aparte, no la Delta 2 ni la
+# batería extra del EcoFlow) — el bot no la mide, así que el % lo pasa el
+# usuario a mano. 484 Wh sale de un dato real (86% ≈ 416 Wh disponibles);
+# 35-45 W es el rango real de consumo medido de la Ecoplay.
+ECOPLAY_OWN_BATTERY_WH = float(os.environ.get("ECOPLAY_OWN_BATTERY_WH", "484"))
+ECOPLAY_OWN_WATTS_MIN = float(os.environ.get("ECOPLAY_OWN_WATTS_MIN", "35"))
+ECOPLAY_OWN_WATTS_MAX = float(os.environ.get("ECOPLAY_OWN_WATTS_MAX", "45"))
 
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
@@ -509,7 +517,7 @@ def set_bot_commands() -> None:
         {"command": "start", "description": "Qué hace este bot"},
         {"command": "reporte", "description": "Informe detallado por dispositivo"},
         {"command": "cargas", "description": "Qué encender/apagar ahora según el plan"},
-        {"command": "ecoplay", "description": "A qué hora prender el wifi para que aguante hasta las 7:30 AM"},
+        {"command": "ecoplay", "description": "A qué hora pasar la Ecoplay a su batería (ej: /ecoplay 86)"},
         {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
         {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off tv)"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
@@ -795,32 +803,19 @@ def build_report(m: dict = None) -> str:
     return _format_report(m)
 
 
-def _ecoplay_schedule_message(m: dict = None, target_hour: int = None, target_minute: int = None) -> str:
-    """A qué hora conviene prender la Ecoplay (120 W) para que, prendida sin
-    cortes desde ese momento, aguante hasta target_hour:target_minute (7:30
-    AM por default, /cargas ya dice que de madrugada es la única carga
-    real). Asume que mientras está apagada la batería no la sigue gastando
-    otra cosa y que no entra sol antes de esa hora — mismo criterio lineal
-    a watts constantes que el resto de las estimaciones del bot. Si con el
-    % actual ya alcanza aunque se prenda ahora mismo, lo dice con el
-    margen; si no, calcula la hora más tarde a la que hay que esperar para
-    que la batería le rinda justo hasta el objetivo."""
-    if m is None:
-        try:
-            m = _gather_metrics()
-        except Exception as exc:
-            log.exception("Error consultando la Delta 2")
-            return f"⚠️ Error al consultar la Delta 2: {exc}"
-    avg_soc = m.get("avg_soc")
-    if avg_soc is None:
-        return "⚠️ No hay dato de batería disponible ahora mismo."
-
+def _ecoplay_own_battery_estimate(percent: float, target_hour: int = None, target_minute: int = None) -> dict:
+    """Con el %SOC de la batería PROPIA de la Ecoplay (un UPS aparte del
+    EcoFlow — el bot no la mide, el % lo pasa el usuario a mano) calcula,
+    para el rango real de consumo (ECOPLAY_OWN_WATTS_MIN-MAX), cuánto
+    aguanta en el peor caso (más consumo) y en el mejor (menos), y a qué
+    hora conviene pasarla a esa batería para que llegue sin cortes hasta
+    el objetivo (7:30 AM por default) incluso en el peor caso. Asume que
+    mientras no está en esa batería no se sigue gastando (nada la drena
+    hasta que se pasa) — mismo criterio lineal a watts constantes que el
+    resto de las estimaciones del bot."""
     th = ECOPLAY_TARGET_HOUR if target_hour is None else target_hour
     tm = ECOPLAY_TARGET_MINUTE if target_minute is None else target_minute
-    num_batteries = 2 if m.get("soc_extra") is not None else 1
-    capacity_wh = BATTERY_CAPACITY_WH * num_batteries
-    watts = DEVICE_INFO["ecoplay"]["watts"]
-    hours_available = capacity_wh * (avg_soc / 100) / watts
+    available_wh = ECOPLAY_OWN_BATTERY_WH * percent / 100
 
     now = datetime.now(TZ)
     target = now.replace(hour=th, minute=tm, second=0, microsecond=0)
@@ -828,29 +823,59 @@ def _ecoplay_schedule_message(m: dict = None, target_hour: int = None, target_mi
         target += timedelta(days=1)
     hours_needed = (target - now).total_seconds() / 3600
 
-    h_avail, min_avail = divmod(int(round(hours_available * 60)), 60)
-    target_str = target.strftime("%H:%M")
-    header = f"📡 *Ecoplay*: con {avg_soc:.1f}% de batería, prendida ahora aguanta *{h_avail}h {min_avail}m*."
+    worst_hours = available_wh / ECOPLAY_OWN_WATTS_MAX  # más consumo = dura menos
+    best_hours = available_wh / ECOPLAY_OWN_WATTS_MIN  # menos consumo = dura más
 
-    if hours_available >= hours_needed:
-        margin_h, margin_m = divmod(int(round((hours_available - hours_needed) * 60)), 60)
-        return (
-            f"{header}\n\n"
-            f"✅ Ya la podés dejar prendida: llega hasta las {target_str} y te sobran {margin_h}h {margin_m}m."
+    return {
+        "available_wh": available_wh,
+        "target": target,
+        "hours_needed": hours_needed,
+        "worst_hours": worst_hours,
+        "best_hours": best_hours,
+        "worst_on_time": target - timedelta(hours=worst_hours),
+        "best_on_time": target - timedelta(hours=best_hours),
+        "already_enough": worst_hours >= hours_needed,
+    }
+
+
+def _ecoplay_schedule_message(percent: float, target_hour: int = None, target_minute: int = None) -> str:
+    """Formatea _ecoplay_own_battery_estimate() como mensaje de Telegram."""
+    if percent is None or not (0 <= percent <= 100):
+        return "⚠️ El porcentaje tiene que estar entre 0 y 100."
+
+    est = _ecoplay_own_battery_estimate(percent, target_hour, target_minute)
+    target_str = est["target"].strftime("%H:%M")
+
+    def hm(hours: float) -> str:
+        h, m = divmod(int(round(hours * 60)), 60)
+        return f"{h}h {m}m"
+
+    lines = [
+        f"📡 *Ecoplay* (batería propia): con {percent:.0f}% (≈{est['available_wh']:.0f} Wh) y "
+        f"{ECOPLAY_OWN_WATTS_MIN:.0f}–{ECOPLAY_OWN_WATTS_MAX:.0f} W de consumo:",
+        f"• Peor caso ({ECOPLAY_OWN_WATTS_MAX:.0f} W): ~{hm(est['worst_hours'])} de autonomía",
+        f"• Mejor caso ({ECOPLAY_OWN_WATTS_MIN:.0f} W): ~{hm(est['best_hours'])} de autonomía",
+        "",
+        f"Para que aguante hasta las {target_str}:",
+    ]
+    if est["already_enough"]:
+        margin = est["worst_hours"] - est["hours_needed"]
+        lines.append(f"✅ Ya la podés pasar a esa batería: llega con {hm(margin)} de margen incluso en el peor caso.")
+    else:
+        lines.append(
+            f"🕒 No la pases antes de las *{est['worst_on_time'].strftime('%H:%M')}* (peor caso) "
+            f"para que aguante hasta las {target_str}."
         )
-
-    on_time = target - timedelta(hours=hours_available)
-    return (
-        f"{header}\n\n"
-        f"🕒 Prendela recién a las *{on_time.strftime('%H:%M')}* para que te rinda justo hasta las {target_str}."
-    )
+        lines.append(f"En el mejor caso alcanzaría desde las {est['best_on_time'].strftime('%H:%M')}.")
+    return "\n".join(lines)
 
 
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/ecoplay [HH:MM] — a qué hora prenderla para que aguante hasta las 7:30 AM (o la hora que le pongas)\n"
+    "/ecoplay <porcentaje> [HH:MM] — a qué hora pasarla a su batería propia para que aguante hasta las 7:30 AM "
+    "(ej: /ecoplay 86, o /ecoplay 86 07:00 para otro horario)\n"
     "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, tv, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
@@ -919,16 +944,26 @@ def handle_command(text: str, chat_id: str) -> None:
             )
         send_telegram(msg, chat_id=chat_id)
     elif cmd == "/ecoplay":
+        usage = "Uso: /ecoplay <porcentaje> [HH:MM] (ej: /ecoplay 86, o /ecoplay 86 07:00)"
+        if len(parts) < 2:
+            send_telegram(usage, chat_id=chat_id)
+            return
+        try:
+            percent = float(parts[1].replace(",", "."))
+        except ValueError:
+            send_telegram(usage, chat_id=chat_id)
+            return
         target_hour = target_minute = None
-        if len(parts) >= 2 and ":" in parts[1]:
+        if len(parts) >= 3 and ":" in parts[2]:
             try:
-                hh, mm = parts[1].split(":")
+                hh, mm = parts[2].split(":")
                 target_hour, target_minute = int(hh), int(mm)
             except ValueError:
-                send_telegram("Uso: /ecoplay [HH:MM] (ej: /ecoplay 06:00)", chat_id=chat_id)
+                send_telegram(usage, chat_id=chat_id)
                 return
         send_telegram(
-            _ecoplay_schedule_message(target_hour=target_hour, target_minute=target_minute), chat_id=chat_id
+            _ecoplay_schedule_message(percent, target_hour=target_hour, target_minute=target_minute),
+            chat_id=chat_id,
         )
     elif cmd in ("/on", "/off"):
         if len(parts) < 2:
@@ -1639,13 +1674,27 @@ def get_device_state_payload() -> dict:
     }
 
 
+# Config de la calculadora de "a qué hora pasar la Ecoplay a su batería
+# propia" (ver _ecoplay_own_battery_estimate) — se manda en /api/status para
+# que la web y la app de Expo calculen en vivo sin duplicar las constantes,
+# aunque el % en sí lo escribe la persona a mano (el bot no mide esa batería).
+def _ecoplay_config_payload() -> dict:
+    return {
+        "ecoplay_battery_wh": ECOPLAY_OWN_BATTERY_WH,
+        "ecoplay_watts_min": ECOPLAY_OWN_WATTS_MIN,
+        "ecoplay_watts_max": ECOPLAY_OWN_WATTS_MAX,
+        "ecoplay_target_hour": ECOPLAY_TARGET_HOUR,
+        "ecoplay_target_minute": ECOPLAY_TARGET_MINUTE,
+    }
+
+
 def get_dashboard_status() -> dict:
     if not ECOFLOW_READY:
-        return {"ready": False, "error": "EcoFlow todavía no está configurado"}
+        return {"ready": False, "error": "EcoFlow todavía no está configurado", **_ecoplay_config_payload()}
     try:
         m = _gather_metrics(passive=True)
     except Exception as exc:
-        return {"ready": False, "error": str(exc)}
+        return {"ready": False, "error": str(exc), **_ecoplay_config_payload()}
 
     percent = m["avg_soc"] if m["avg_soc"] is not None else m["soc_delta2"]
     delta2_remain = _battery_remain(m["soc_delta2"], m["delta2_net_w"])
@@ -1710,6 +1759,7 @@ def get_dashboard_status() -> dict:
         "goal_floor": goal_floor,
         "goal_projected": goal_projected,
         "goal_met": goal_met,
+        **_ecoplay_config_payload(),
     }
 
 
@@ -1820,6 +1870,20 @@ DASHBOARD_HTML = """<!doctype html>
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
   .device-btn.on .state { color: #4ade80; }
   .device-btn.off .state { color: #6b7684; }
+  .ecoplay { width: 100%; max-width: 380px; margin-top: 14px; }
+  .ecoplay .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
+  .ecoplay-box {
+    background: #141b22; border: 1px solid #232b33; border-radius: 10px; padding: 12px 14px;
+  }
+  .ecoplay-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+  .ecoplay-row label { font-size: 13px; color: #9aa4af; }
+  .ecoplay-row input {
+    background: #0b0f14; border: 1px solid #232b33; border-radius: 8px; color: #f5f5f5;
+    font-size: 14px; padding: 6px 10px; width: 90px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .ecoplay-result { font-size: 13px; line-height: 1.6; color: #cbd5e1; }
+  .ecoplay-note { font-size: 11px; color: #6b7684; margin-top: 8px; }
   .cargas { width: 100%; max-width: 380px; margin-top: 14px; }
   .cargas .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .cargas-box {
@@ -1900,6 +1964,22 @@ DASHBOARD_HTML = """<!doctype html>
     <div id="devices"></div>
   </div>
 
+  <div class="ecoplay">
+    <div class="title">📡 Ecoplay — batería propia</div>
+    <div class="ecoplay-box">
+      <div class="ecoplay-row">
+        <label for="ecoplay-pct">% de su batería</label>
+        <input type="number" id="ecoplay-pct" min="0" max="100" step="1" inputmode="numeric" placeholder="86">
+      </div>
+      <div class="ecoplay-row">
+        <label for="ecoplay-target">Aguantar hasta</label>
+        <input type="time" id="ecoplay-target">
+      </div>
+      <div class="ecoplay-result" id="ecoplay-result">Poné el % de la batería propia de la Ecoplay.</div>
+      <div class="ecoplay-note">No es la Delta 2 ni la batería extra — es el UPS aparte de la Ecoplay, así que el % se escribe a mano.</div>
+    </div>
+  </div>
+
   <div class="updated">
     <span class="live-dot" id="live-dot"></span>
     <span id="updated-text"></span>
@@ -1932,6 +2012,80 @@ DASHBOARD_HTML = """<!doctype html>
       return { state: 'discharging', label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
     }
 
+    // Calculadora de "a qué hora pasar la Ecoplay a su batería propia" — un
+    // UPS aparte del EcoFlow que el bot no mide, así que el % lo escribe la
+    // persona a mano. La capacidad y el rango de watts vienen de /api/status
+    // (ecoplayConfig, mismas constantes que usa /ecoplay por Telegram) para
+    // no duplicarlas; el % en sí se guarda solo en este navegador.
+    let ecoplayConfig = { batteryWh: 484, wattsMin: 35, wattsMax: 45, targetHour: 7, targetMinute: 30 };
+
+    function loadEcoplayPct() {
+      try {
+        const saved = localStorage.getItem('ecoplayPct');
+        if (saved != null) document.getElementById('ecoplay-pct').value = saved;
+      } catch (e) { /* localStorage puede no estar disponible (privado/bloqueado) */ }
+    }
+
+    function saveEcoplayPct(pct) {
+      try { localStorage.setItem('ecoplayPct', String(pct)); } catch (e) { /* no crítico */ }
+    }
+
+    function fmtHM(hours) {
+      const h = Math.floor(hours);
+      const m = Math.round((hours - h) * 60);
+      return `${h}h ${m}m`;
+    }
+    function fmtTime(d) { return d.toTimeString().slice(0, 5); }
+
+    function renderEcoplay() {
+      const pctInput = document.getElementById('ecoplay-pct');
+      const targetInput = document.getElementById('ecoplay-target');
+      const result = document.getElementById('ecoplay-result');
+      const pct = parseFloat(pctInput.value);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+        result.textContent = 'Poné el % de la batería propia de la Ecoplay.';
+        return;
+      }
+      saveEcoplayPct(pct);
+
+      const [th, tm] = (targetInput.value || '').split(':').map(Number);
+      const hasTarget = Number.isFinite(th) && Number.isFinite(tm);
+      const targetHour = hasTarget ? th : ecoplayConfig.targetHour;
+      const targetMinute = hasTarget ? tm : ecoplayConfig.targetMinute;
+
+      const now = new Date();
+      const target = new Date(now);
+      target.setHours(targetHour, targetMinute, 0, 0);
+      if (target <= now) target.setDate(target.getDate() + 1);
+      const hoursNeeded = (target - now) / 3600000;
+
+      const availableWh = ecoplayConfig.batteryWh * pct / 100;
+      const worstHours = availableWh / ecoplayConfig.wattsMax; // más consumo = dura menos
+      const bestHours = availableWh / ecoplayConfig.wattsMin; // menos consumo = dura más
+      const targetStr = fmtTime(target);
+
+      let html = `<div>Con ${pct}% (≈${Math.round(availableWh)} Wh) y ${ecoplayConfig.wattsMin}–${ecoplayConfig.wattsMax} W de consumo:</div>`;
+      html += `<div>• Peor caso (${ecoplayConfig.wattsMax} W): ~${fmtHM(worstHours)} de autonomía</div>`;
+      html += `<div>• Mejor caso (${ecoplayConfig.wattsMin} W): ~${fmtHM(bestHours)} de autonomía</div>`;
+
+      if (worstHours >= hoursNeeded) {
+        const margin = worstHours - hoursNeeded;
+        html += `<div style="color:#4ade80;margin-top:6px">✅ Ya la podés pasar a esa batería: llega hasta las ${targetStr} con ${fmtHM(margin)} de margen incluso en el peor caso.</div>`;
+      } else {
+        const worstOn = new Date(target.getTime() - worstHours * 3600000);
+        const bestOn = new Date(target.getTime() - bestHours * 3600000);
+        html += `<div style="color:#eab308;margin-top:6px">🕒 No la pases antes de las <strong>${fmtTime(worstOn)}</strong> (peor caso) para que aguante hasta las ${targetStr}.</div>`;
+        html += `<div>En el mejor caso alcanzaría desde las ${fmtTime(bestOn)}.</div>`;
+      }
+      result.innerHTML = html;
+    }
+
+    document.getElementById('ecoplay-pct').addEventListener('input', renderEcoplay);
+    document.getElementById('ecoplay-target').addEventListener('change', renderEcoplay);
+    loadEcoplayPct();
+    renderEcoplay();
+    setInterval(renderEcoplay, 30000); // "faltan Xh" se corre solo con el reloj, sin que la persona toque nada
+
     let reqId = 0;
     async function refresh() {
       const myId = ++reqId;
@@ -1939,6 +2093,17 @@ DASHBOARD_HTML = """<!doctype html>
         const res = await fetch('/api/status');
         const d = await res.json();
         if (myId !== reqId) return; // llegó una respuesta vieja después de una más nueva, se descarta
+        if (d.ecoplay_battery_wh != null) {
+          ecoplayConfig = {
+            batteryWh: d.ecoplay_battery_wh, wattsMin: d.ecoplay_watts_min, wattsMax: d.ecoplay_watts_max,
+            targetHour: d.ecoplay_target_hour, targetMinute: d.ecoplay_target_minute,
+          };
+          if (!document.getElementById('ecoplay-target').value) {
+            document.getElementById('ecoplay-target').value =
+              `${String(ecoplayConfig.targetHour).padStart(2, '0')}:${String(ecoplayConfig.targetMinute).padStart(2, '0')}`;
+          }
+          renderEcoplay();
+        }
         if (!d.ready) {
           document.getElementById('source-verb').textContent = d.error || 'No listo todavía';
           document.getElementById('live-dot').classList.remove('ok');
