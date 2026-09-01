@@ -749,8 +749,25 @@ def _gather_metrics(passive: bool = False) -> dict:
     extra_in_w = _pick(data, "bms_slave.inputWatts")
     extra_out_w = _pick(data, "bms_slave.outputWatts")
     pv_w = get_pv_watts(data)
-    out_w = _pick(data, "pd.wattsOutSum", "inv.outputWatts", default=0)
     ac_out_w_raw = _pick(data, "inv.outputWatts")
+    usb_out_w_raw = (
+        (_pick(data, "pd.typec1Watts") or 0)
+        + (_pick(data, "pd.typec2Watts") or 0)
+        + (_pick(data, "pd.usb1Watts") or 0)
+        + (_pick(data, "pd.usb2Watts") or 0)
+    )
+    car_out_w_raw = _pick(data, "pd.carWatts") or 0
+    # pd.wattsOutSum se queda pegado en 0 mientras los canales individuales
+    # (inv.outputWatts/typecXWatts/usbXWatts/carWatts) sí reportan salida real
+    # — confirmado comparando con la propia app oficial de EcoFlow, que
+    # también muestra "Salida: 0 W" arriba pero "CA: 33 W" en el desglose de
+    # abajo (mismo dato roto en origen, no un problema de parseo nuestro).
+    # Se toma el máximo entre el campo agregado y la suma de canales para no
+    # subestimar el consumo real cuando el agregado se atrasa.
+    out_w = max(
+        _pick(data, "pd.wattsOutSum", default=0),
+        (ac_out_w_raw or 0) + usb_out_w_raw + car_out_w_raw,
+    )
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
@@ -830,12 +847,7 @@ def _gather_metrics(passive: bool = False) -> dict:
     active_ports = [{"name": name, "watts": w} for name, w in ports if w and w > NOISE_FLOOR_W]
 
     ac_out_w = _nf(ac_out_w_raw)
-    usb_out_w = _nf(
-        (_pick(data, "pd.typec1Watts") or 0)
-        + (_pick(data, "pd.typec2Watts") or 0)
-        + (_pick(data, "pd.usb1Watts") or 0)
-        + (_pick(data, "pd.usb2Watts") or 0)
-    )
+    usb_out_w = _nf(usb_out_w_raw)
 
     return {
         "soc_delta2": soc_delta2,
