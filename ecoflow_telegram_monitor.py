@@ -1306,6 +1306,29 @@ def ac_check_timer() -> None:
 
 WATCHDOG_CHECK_MINUTES = 5
 WATCHDOG_STALE_MINUTES = 5  # sin datos frescos por más de esto = alerta
+QUOTA_REFRESH_SECONDS = 15  # cada cuánto se fuerza un quotaMap completo
+
+
+def quota_refresh_loop() -> None:
+    """Pide un quotaMap completo cada QUOTA_REFRESH_SECONDS. El caché pasivo
+    (_device_cache, el que lee el dashboard/app sin pedir refresh) se
+    alimenta del stream de push espontáneo del dispositivo, que solo manda
+    los campos que cambian — si un canal puntual (ej. inv.outputWatts) deja
+    de reportarse espontáneamente al volver a 0, el merge en
+    _on_mqtt_message (dict.update, sin expiración) lo deja pegado en el
+    último valor no-cero para siempre. Confirmado en vivo: out_w/ac_out_w
+    quedaron fijos en 33W durante 4 lecturas seguidas del dashboard mientras
+    otros campos (pv_w, soc, delta2_net_w) sí cambiaban normalmente, y una
+    consulta activa (latestQuotas) en el mismo momento mostró el canal en
+    null/0 real. Forzar un refresh completo periódico corrige esos campos
+    pegados sin necesitar timestamps por campo."""
+    while True:
+        time.sleep(QUOTA_REFRESH_SECONDS)
+        if not USE_PRIVATE_API:
+            continue
+        for sn in (SN_DELTA2, SN_EXTRA):
+            if sn:
+                _request_quota_refresh(sn)
 
 
 def watchdog_timer() -> None:
@@ -3001,6 +3024,7 @@ def main() -> None:
     threading.Thread(target=run_dashboard_server, daemon=True).start()
     if USE_PRIVATE_API:
         threading.Thread(target=start_private_mqtt, daemon=True).start()
+        threading.Thread(target=quota_refresh_loop, daemon=True).start()
 
     log.info(
         "Monitor iniciado. Informe a las :00/:30 (pausado %02d:%02d-%02d:%02d), chequeo AC cada %.1f min.",
