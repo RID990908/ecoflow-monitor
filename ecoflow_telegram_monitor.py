@@ -1842,20 +1842,25 @@ def _check_battery_projection(now=None) -> None:
             best_case_helps = best_proj is not None and best_proj[2] >= floor - PROJECTION_ALERT_MARGIN
 
             if best_case_helps:
-                action = "Bajá carga (laptop, power bank, ventilador) — la nevera es protegida, no la toques."
-            else:
-                action = (
-                    "Ni apagando todo lo que se puede llegás a esa meta ahora mismo — "
-                    "no es problema de consumo, no hay sol suficiente en lo que queda."
+                send_telegram(
+                    "⚠️ *Se está yendo de control*\n\n"
+                    f"Proyectás *{projected:.0f}%* para {label} (meta {floor}%+)\n"
+                    f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n\n"
+                    "Bajá carga (laptop, power bank, ventilador) — la nevera es protegida, no la toques."
                 )
-            send_telegram(
-                "⚠️ *Se está yendo de control*\n\n"
-                f"Proyectás *{projected:.0f}%* para {label} (meta {floor}%+)\n"
-                f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n\n"
-                f"{action}"
-            )
-            _projection_alerted_for[cp_min] = today
-            log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
+                _projection_alerted_for[cp_min] = today
+                log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
+            else:
+                # Ni apagando todo lo que se puede llegás a la meta: no es
+                # problema de consumo, no hay sol suficiente en lo que queda.
+                # Avisar acá no es accionable — el usuario ya confirmó que
+                # prefiere silencio en vez de una alerta sobre algo que no
+                # puede cambiar. Se entera del resultado por el informe normal.
+                _projection_alerted_for[cp_min] = today
+                log.info(
+                    "Proyección de batería por debajo de meta pero sin acción posible (checkpoint %s) — sin alerta",
+                    label,
+                )
     elif _projection_alerted_for.get(cp_min) == today:
         del _projection_alerted_for[cp_min]
 
