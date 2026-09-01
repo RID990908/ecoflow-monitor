@@ -337,6 +337,20 @@ def _request_quota_refresh(sn: str) -> None:
     _mqtt_client.publish(topics["get"], payload)
 
 
+_bms_slave_last_seen = {}  # {sn: timestamp} última vez que llegó algún campo bms_slave.* real
+
+
+def _mark_bms_slave_seen(sn: str, fields: dict) -> None:
+    # La batería extra no tiene su propio topic MQTT: sus datos (bms_slave.*)
+    # vienen mezclados en el mismo mensaje que el resto de la Delta 2. Si se
+    # desconecta físicamente, el dispositivo deja de incluir esas claves por
+    # completo (no manda un 0 explícito) — el merge de _device_cache no
+    # expira nunca, así que sin este tracking aparte, un valor viejo (ej.
+    # 20W cargando) queda pegado para siempre aunque la batería ya no esté.
+    if any(k.startswith("bms_slave.") for k in fields):
+        _bms_slave_last_seen[sn] = time.time()
+
+
 def _on_mqtt_message(client, userdata, msg):
     try:
         raw = json.loads(msg.payload.decode("utf-8", errors="ignore"))
@@ -349,15 +363,18 @@ def _on_mqtt_message(client, userdata, msg):
         topics = _mqtt_topics(sn)
         with _mqtt_cache_lock:
             if msg.topic == topics["data"]:
+                fields = raw.get("params", raw)
                 entry = _device_cache.setdefault(sn, {})
-                entry.setdefault("quota", {}).update(raw.get("params", raw))
+                entry.setdefault("quota", {}).update(fields)
                 entry["updated_at"] = time.time()
+                _mark_bms_slave_seen(sn, fields)
             elif msg.topic == topics["get_reply"] and raw.get("operateType") == "latestQuotas":
                 d = raw.get("data", {})
                 entry = _device_cache.setdefault(sn, {})
                 entry["online"] = bool(d.get("online"))
                 if d.get("online") and "quotaMap" in d:
                     entry.setdefault("quota", {}).update(d["quotaMap"])
+                    _mark_bms_slave_seen(sn, d["quotaMap"])
                 entry["updated_at"] = time.time()
 
 
@@ -464,6 +481,7 @@ def get_ac_watts(data: dict):
 
 
 NOISE_FLOOR_W = 5  # por debajo de esto es ruido de medición, no transferencia real (ver AC_WATTS_THRESHOLD arriba, mismo valor pero para el puerto AC especificamente)
+EXTRA_BATTERY_STALE_MINUTES = 5  # sin campos bms_slave.* reales por más de esto = se trata como desconectada
 AC_VOLTAGE_THRESHOLD_MV = 50000  # ~50V; AC real ronda 110000-240000 mV, esto solo filtra ausencia/ruido
 
 
@@ -745,9 +763,21 @@ def _gather_metrics(passive: bool = False) -> dict:
         return int(v) if v is not None and v > NOISE_FLOOR_W else 0
 
     soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
-    soc_extra = get_extra_battery_soc(data)
-    extra_in_w = _pick(data, "bms_slave.inputWatts")
-    extra_out_w = _pick(data, "bms_slave.outputWatts")
+    # Si hace rato que no llega ningún campo bms_slave.* real, la batería
+    # extra probablemente se desconectó — el merge de _device_cache no
+    # expira solo, así que sin este chequeo quedaría pegada con su último
+    # valor conocido (ver _mark_bms_slave_seen). Se trata como ausente en
+    # vez de mostrar el fantasma del último dato.
+    bms_slave_last_seen = _bms_slave_last_seen.get(SN_DELTA2)
+    bms_slave_fresh = bms_slave_last_seen is not None and (time.time() - bms_slave_last_seen) <= EXTRA_BATTERY_STALE_MINUTES * 60
+    if bms_slave_fresh:
+        soc_extra = get_extra_battery_soc(data)
+        extra_in_w = _pick(data, "bms_slave.inputWatts")
+        extra_out_w = _pick(data, "bms_slave.outputWatts")
+    else:
+        soc_extra = None
+        extra_in_w = None
+        extra_out_w = None
     pv_w = get_pv_watts(data)
     ac_out_w_raw = _pick(data, "inv.outputWatts")
     usb_out_w_raw = (
