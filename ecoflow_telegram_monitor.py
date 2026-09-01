@@ -1751,6 +1751,7 @@ BATTERY_CHECKPOINTS = [
 # válido bajo uso mixto normal.
 
 _projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se avisó ese checkpoint
+_forecast_sent_for = None  # date del último "Pronóstico" (caso sin acción posible) ya enviado
 
 
 def _next_checkpoint(now):
@@ -1808,8 +1809,12 @@ def _log_checkpoint_result(now, avg_soc) -> None:
 
 def _check_battery_projection(now=None) -> None:
     """Un chequeo: proyecta el %SOC en el próximo checkpoint con el ritmo de
-    descarga actual y avisa (una vez por checkpoint/día, con rearme si se
-    recupera) si va a quedar por debajo de la meta menos el margen."""
+    descarga actual. Si va a quedar por debajo de la meta menos el margen y
+    bajar carga discrecional ayudaría, avisa (una vez por checkpoint/día, con
+    rearme si se recupera). Si ni apagando todo se llega a la meta (problema
+    de sol, no de consumo), manda en cambio un "Pronóstico" informativo, una
+    sola vez por día en vez de por checkpoint."""
+    global _forecast_sent_for
     now = now or datetime.now(TZ)
     minute_of_day = now.hour * 60 + now.minute
     if not (LOAD_ADVISOR_START_MIN <= minute_of_day < LOAD_ADVISOR_END_MIN):
@@ -1853,14 +1858,26 @@ def _check_battery_projection(now=None) -> None:
             else:
                 # Ni apagando todo lo que se puede llegás a la meta: no es
                 # problema de consumo, no hay sol suficiente en lo que queda.
-                # Avisar acá no es accionable — el usuario ya confirmó que
-                # prefiere silencio en vez de una alerta sobre algo que no
-                # puede cambiar. Se entera del resultado por el informe normal.
+                # Una alerta de "bajá carga" acá sería engañosa (no ayuda) y
+                # una de "se está yendo de control" no es accionable — el
+                # usuario prefiere un aviso informativo de una sola vez por
+                # día (no por checkpoint) en vez de silencio total o de
+                # repetir el mismo no-accionable en cada checkpoint fallido.
                 _projection_alerted_for[cp_min] = today
-                log.info(
-                    "Proyección de batería por debajo de meta pero sin acción posible (checkpoint %s) — sin alerta",
-                    label,
-                )
+                if _forecast_sent_for != today:
+                    send_telegram(
+                        "🔎 *Pronóstico*\n\n"
+                        f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n"
+                        f"Con el sol que queda, vas a llegar a {label} en ~{projected:.0f}% "
+                        f"(meta {floor}%+) — es tema de sol, no de consumo, no hay apagado que lo cambie."
+                    )
+                    _forecast_sent_for = today
+                    log.info("Pronóstico sin acción posible enviado (checkpoint %s)", label)
+                else:
+                    log.info(
+                        "Proyección de batería por debajo de meta sin acción posible (checkpoint %s) — ya se avisó hoy",
+                        label,
+                    )
     elif _projection_alerted_for.get(cp_min) == today:
         del _projection_alerted_for[cp_min]
 
