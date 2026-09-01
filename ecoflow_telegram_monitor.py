@@ -636,16 +636,24 @@ def _battery_remain(soc, net_w) -> dict | None:
     return {"charging": charging, "text": f"{h}h {m}m"}
 
 
-def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
-    """Estimación lineal (mismo criterio que pd.remainTime del propio
-    dispositivo) de cuánto falta para que la carga llegue al umbral de
-    batería baja configurado con /alerta."""
+def _time_to_threshold_eta(soc, net_w, num_batteries, threshold):
+    """Datetime estimado (lineal, mismo criterio que pd.remainTime del propio
+    dispositivo) en que la carga llega al umbral de batería baja configurado
+    con /alerta, o None si no aplica (cargando, ya por debajo del umbral, o
+    datos faltantes)."""
     if soc is None or net_w is None or net_w >= -NOISE_FLOOR_W or soc <= threshold:
-        return ""
+        return None
     capacity_wh = BATTERY_CAPACITY_WH * num_batteries
     energy_to_burn_wh = capacity_wh * (soc - threshold) / 100
     hours = energy_to_burn_wh / (-net_w)
-    eta = datetime.now(TZ) + timedelta(hours=hours)
+    return datetime.now(TZ) + timedelta(hours=hours)
+
+
+def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
+    eta = _time_to_threshold_eta(soc, net_w, num_batteries, threshold)
+    if eta is None:
+        return ""
+    hours = (eta - datetime.now(TZ)).total_seconds() / 3600
     h, m = divmod(int(round(hours * 60)), 60)
     return f"🪫 ~{h}h {m}m para llegar al {threshold}% (a las {eta.strftime('%H:%M')})"
 
@@ -864,8 +872,10 @@ def _gather_metrics(passive: bool = False) -> dict:
 
     if soc_extra is not None:
         threshold_line = _time_to_threshold_line(avg_soc, system_net_w, 2, BATTERY_LOW_THRESHOLD)
+        threshold_eta = _time_to_threshold_eta(avg_soc, system_net_w, 2, BATTERY_LOW_THRESHOLD)
     else:
         threshold_line = _time_to_threshold_line(soc_delta2, delta2_net_w, 1, BATTERY_LOW_THRESHOLD)
+        threshold_eta = _time_to_threshold_eta(soc_delta2, delta2_net_w, 1, BATTERY_LOW_THRESHOLD)
 
     ports = [
         ("USB-C", _pick(data, "pd.typec1Watts")),
@@ -895,6 +905,7 @@ def _gather_metrics(passive: bool = False) -> dict:
         "source_emoji": source_emoji,
         "remain": remain,
         "threshold_line": threshold_line,
+        "threshold_eta": threshold_eta,
         "ports": active_ports,
         "ac_out_w": ac_out_w,
         "extra_in_w": extra_in_w_nf,
@@ -2018,6 +2029,12 @@ def get_dashboard_status() -> dict:
         "eta_ok": eta_ok,
         "remain_duration": remain_duration,
         "threshold_text": m["threshold_line"].replace("🪫 ", "") if m["threshold_line"] else None,
+        # Versión corta ("20% a las 17:30", mismo estilo que "Llena a las")
+        # para mostrar adentro del aro, sin repetir la duración que ya
+        # muestra "Tiempo restante" arriba.
+        "threshold_short": (
+            f"{BATTERY_LOW_THRESHOLD}% a las {m['threshold_eta'].strftime('%H:%M')}" if m["threshold_eta"] else None
+        ),
         "threshold_pct": BATTERY_LOW_THRESHOLD,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         # Versión corta ("hace 3h 20m") para mostrar pegada al nodo AC del
@@ -2176,6 +2193,7 @@ DASHBOARD_HTML = """<!doctype html>
   .pct-eta { font-size: 13px; font-weight: 600; margin-top: 4px; }
   .pct-eta.eta-ok { color: #4ade80; }
   .pct-eta.eta-warn { color: #f87171; }
+  .pct-threshold { font-size: 12px; font-weight: 600; margin-top: 3px; color: #f87171; }
   .eta-box {
     margin-top: 4px; padding: 14px 22px; border-radius: 16px; background: #141b22;
     text-align: center; max-width: 340px; width: 100%;
@@ -2183,12 +2201,9 @@ DASHBOARD_HTML = """<!doctype html>
     transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), visibility 200ms;
   }
   .eta-box.visible { opacity: 1; transform: scale(1); visibility: visible; }
-  .eta-box .eta-sub { font-size: 13px; color: #9aa4af; display: inline-flex; align-items: center; gap: 4px; justify-content: center; }
-  .eta-box .eta-sub .batt-icon { width: 14px; }
   .eta-box .eta-goal {
     font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
   }
-  .eta-goal.with-border { margin-top: 8px; padding-top: 8px; border-top: 1px solid #232c36; }
   .eta-goal.eta-ok { color: #4ade80; }
   .eta-goal.eta-warn { color: #f87171; }
   .lateral-pct { font-size: 12px; font-weight: 700; color: #e5e7eb; margin-top: 3px; font-variant-numeric: tabular-nums; }
@@ -2394,7 +2409,7 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="ring" id="ring">
       <div class="ring-inner">
         <div class="pct" id="pct">--%</div>
-        <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div><div class="pct-eta" id="pct-eta"></div></div>
+        <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div><div class="pct-eta" id="pct-eta"></div><div class="pct-threshold" id="pct-threshold"></div></div>
       </div>
     </div>
     <div class="lateral-overlay-left">
@@ -2467,7 +2482,6 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 
   <div class="eta-box" id="eta-box">
-    <div class="eta-sub" id="eta-sub"></div>
     <div class="eta-goal" id="eta-goal"></div>
   </div>
 
@@ -2568,43 +2582,28 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('pct').textContent = (d.percent != null ? d.percent.toFixed(1) : '--') + '%';
         document.getElementById('dur').textContent = d.remain_duration || '--';
 
-        // "Llena a las" se muestra pegado al tiempo restante del aro (antes
-        // vivía en la eta-box de la derecha) — mismo dato, nuevo lugar.
+        // "Llena a las" y la alerta de batería baja se muestran pegadas al
+        // tiempo restante del aro (antes vivían en la eta-box de la
+        // derecha) — mismo dato, nuevo lugar, mismo estilo entre las dos.
         const pctEta = document.getElementById('pct-eta');
         pctEta.textContent = d.eta_text || '';
         pctEta.className = 'pct-eta ' + (d.eta_ok ? 'eta-ok' : 'eta-warn');
+        document.getElementById('pct-threshold').textContent = d.threshold_short || '';
 
         document.getElementById('ac-note').textContent = d.last_ac_short || 'sin registro';
 
-        // La eta-box ahora solo aloja las dos alertas accionables: batería
-        // baja (threshold_text) y Meta — "Llena a las" y "última vez que
-        // llegó AC" son puramente informativos y ya se muestran en el
-        // diagrama principal (ver arriba y el nodo AC).
+        // La eta-box ahora solo aloja la Meta — "Llena a las", la alerta de
+        // batería baja y "última vez que llegó AC" son informativas y ya
+        // se muestran en el diagrama principal (aro y nodo AC).
         const etaBox = document.getElementById('eta-box');
         const etaGoal = document.getElementById('eta-goal');
-        const etaSub = document.getElementById('eta-sub');
-        if (d.threshold_text) {
-          etaSub.innerHTML = batteryIcon('discharging') + d.threshold_text;
-          etaSub.style.display = '';
-        } else {
-          etaSub.innerHTML = '';
-          etaSub.style.display = 'none';
-        }
-
-        // Meta/checkpoint del próximo horario del plan — misma proyección
-        // que ya usa /cargas (_project_to_checkpoint), integrada dentro de
-        // la misma caja de eta en vez de una caja aparte.
         if (d.goal_label) {
           const icon = d.goal_met ? '✅' : '⚠️';
           etaGoal.textContent = `${icon} Meta: ${d.goal_floor}% para ${d.goal_label} (proyectás ${d.goal_projected.toFixed(0)}%)`;
-          etaGoal.className = 'eta-goal ' + (d.goal_met ? 'eta-ok' : 'eta-warn') + (d.threshold_text ? ' with-border' : '');
-        } else {
-          etaGoal.textContent = '';
-        }
-
-        if (d.threshold_text || d.goal_label) {
+          etaGoal.className = 'eta-goal ' + (d.goal_met ? 'eta-ok' : 'eta-warn');
           etaBox.classList.add('visible');
         } else {
+          etaGoal.textContent = '';
           etaBox.classList.remove('visible');
         }
 
