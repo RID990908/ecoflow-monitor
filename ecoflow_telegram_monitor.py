@@ -2020,6 +2020,12 @@ def get_dashboard_status() -> dict:
         "threshold_text": m["threshold_line"].replace("🪫 ", "") if m["threshold_line"] else None,
         "threshold_pct": BATTERY_LOW_THRESHOLD,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
+        # Versión corta ("hace 3h 20m") para mostrar pegada al nodo AC del
+        # diagrama en vez de la frase completa — mismo cómputo que
+        # _last_ac_line, sin el prefijo "Última vez que llegó corriente:".
+        "last_ac_short": (
+            f"hace {_format_elapsed(time.time() - LAST_AC_TIMESTAMP)}" if LAST_AC_TIMESTAMP else None
+        ),
         "ports": m["ports"],
         "ac_out_w": m["ac_out_w"] or 0,
         "extra_in_w": m["extra_in_w"] or 0,
@@ -2068,6 +2074,7 @@ DASHBOARD_HTML = """<!doctype html>
   .icons-row { width: 100%; max-width: 380px; display: flex; justify-content: space-around; margin-bottom: 14px; }
   .icon-item { display: flex; flex-direction: column; align-items: center; width: 84px; }
   .icon-name { font-size: 10px; color: #6b7684; margin-top: 2px; letter-spacing: .3px; text-transform: uppercase; }
+  .last-ac-short { font-size: 11px; color: #6b7684; text-align: center; margin-bottom: 6px; }
   .icon-circle {
     width: 52px; height: 52px; border-radius: 50%; background: #1c232b;
     display: flex; align-items: center; justify-content: center; font-size: 22px;
@@ -2166,6 +2173,9 @@ DASHBOARD_HTML = """<!doctype html>
   .pct { font-size: 48px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
   .pct-sub { font-size: 14px; color: #9aa4af; margin-top: 6px; text-align: center; }
   .pct-sub .dur { font-size: 23px; color: #e5e7eb; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .pct-eta { font-size: 13px; font-weight: 600; margin-top: 4px; }
+  .pct-eta.eta-ok { color: #4ade80; }
+  .pct-eta.eta-warn { color: #f87171; }
   .eta-box {
     margin-top: 4px; padding: 14px 22px; border-radius: 16px; background: #141b22;
     text-align: center; max-width: 340px; width: 100%;
@@ -2173,27 +2183,16 @@ DASHBOARD_HTML = """<!doctype html>
     transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), visibility 200ms;
   }
   .eta-box.visible { opacity: 1; transform: scale(1); visibility: visible; }
-  .eta-box .eta-main { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .eta-main.eta-ok { color: #4ade80; }
-  .eta-main.eta-warn { color: #f87171; }
-  .eta-box .eta-sub { font-size: 13px; color: #9aa4af; margin-top: 4px; display: inline-flex; align-items: center; gap: 4px; justify-content: center; }
+  .eta-box .eta-sub { font-size: 13px; color: #9aa4af; display: inline-flex; align-items: center; gap: 4px; justify-content: center; }
   .eta-box .eta-sub .batt-icon { width: 14px; }
   .eta-box .eta-goal {
-    font-size: 13px; font-weight: 700; margin-top: 8px; padding-top: 8px;
-    border-top: 1px solid #232c36; font-variant-numeric: tabular-nums;
+    font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
   }
+  .eta-goal.with-border { margin-top: 8px; padding-top: 8px; border-top: 1px solid #232c36; }
   .eta-goal.eta-ok { color: #4ade80; }
   .eta-goal.eta-warn { color: #f87171; }
-  .batteries { width: 100%; max-width: 380px; margin-top: 10px; }
-  .battery-row {
-    display: flex; justify-content: space-between; align-items: center;
-    background: #141b22; border-radius: 14px; padding: 12px 16px; margin-top: 8px;
-  }
-  .battery-row .name { font-size: 14px; color: #cbd5e1; display: flex; align-items: center; gap: 6px; }
-  .battery-row .sub { font-size: 12px; color: #6b7684; font-weight: 400; }
-  .battery-row .val { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .battery-row .val.charging { color: #4ade80; }
-  .battery-row .val.discharging { color: #f87171; }
+  .lateral-pct { font-size: 12px; font-weight: 700; color: #e5e7eb; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .lateral-remain { font-size: 10px; font-weight: 600; margin-top: 1px; font-variant-numeric: tabular-nums; }
   .usb-svg { flex-shrink: 0; color: #9aa4af; }
   .devices { width: 100%; max-width: 380px; margin-top: 10px; }
   .devices .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
@@ -2259,6 +2258,12 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
     <div class="io-col out"><div class="io-label" id="out-label">Salida <svg class="io-svg" viewBox="0 0 24 24" width="14" height="14"><path d="M12 21V11m0 0l-4 4m4-4l4 4M4 5h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="io-value" id="out-w">-- W</div></div>
   </div>
+
+  <!-- Última vez que llegó AC, formato corto ("hace Xh") — antes vivía en
+       la eta-box de la derecha, movida acá (centrada, entre el header de
+       Entrada/Salida y la fila de íconos AC/Solar) a pedido del usuario.
+       KEEP IN SYNC WITH App.tsx. -->
+  <div class="last-ac-short" id="last-ac-short"></div>
 
   <!-- GEOMETRY SPEC (top, mirrored, manifold/elbow style): sdd/power-flow-bottom-nodes/design §4 —
        viewBox 0 0 300 130, hub (150,122) at the ring's top edge, nodes
@@ -2394,7 +2399,7 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="ring" id="ring">
       <div class="ring-inner">
         <div class="pct" id="pct">--%</div>
-        <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div></div>
+        <div class="pct-sub">Tiempo restante<div class="dur" id="dur">--</div><div class="pct-eta" id="pct-eta"></div></div>
       </div>
     </div>
     <div class="lateral-overlay-left">
@@ -2407,6 +2412,8 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="icon-circle" id="delta2-circle">🔋</div>
         <div class="icon-watts" id="delta2-w">0 W</div>
         <div class="icon-name">Delta 2</div>
+        <div class="lateral-pct" id="delta2-pct"></div>
+        <div class="lateral-remain" id="delta2-remain-text"></div>
       </div>
     </div>
     <div class="lateral-overlay">
@@ -2419,6 +2426,8 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="icon-circle" id="lateral-circle">🔋</div>
         <div class="icon-watts" id="lateral-w">0 W</div>
         <div class="icon-name">Batería</div>
+        <div class="lateral-pct" id="lateral-pct"></div>
+        <div class="lateral-remain" id="lateral-remain-text"></div>
       </div>
     </div>
   </div>
@@ -2463,12 +2472,9 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 
   <div class="eta-box" id="eta-box">
-    <div class="eta-main" id="eta-main"></div>
     <div class="eta-sub" id="eta-sub"></div>
     <div class="eta-goal" id="eta-goal"></div>
   </div>
-
-  <div class="batteries" id="batteries"></div>
 
   <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
        Solo alcanzable tocando el badge de Ecoplay en "Estado de carga"
@@ -2529,11 +2535,19 @@ DASHBOARD_HTML = """<!doctype html>
       return `<span class="batt-icon ${cls}">${BATTERY_SVG}</span>`;
     }
 
-    function batteryFlow(netW) {
-      // mismo criterio que el informe de Telegram: neutral (gris) o carga (verde)/descarga (rojo)
-      if (netW == null || (netW > -NOISE_FLOOR_W && netW < NOISE_FLOOR_W)) return { state: 'neutral', label: 'Carga', suffix: '', cls: '' };
-      if (netW > NOISE_FLOOR_W) return { state: 'charging', label: 'Carga', suffix: ` (${Math.round(netW)} W)`, cls: 'charging' };
-      return { state: 'discharging', label: 'Descarga', suffix: ` (${Math.abs(Math.round(netW))} W)`, cls: 'discharging' };
+    // % y tiempo de carga/descarga DE ESTA batería puntual (no el combinado
+    // del aro), pegados al nodo lateral — antes vivían en la sección
+    // aparte #batteries, movidos acá a pedido del usuario. remain ya viene
+    // calculado por el backend contemplando ambas direcciones.
+    function setLateralStats(prefix, pct, remain) {
+      document.getElementById(`${prefix}-pct`).textContent = pct != null ? pct.toFixed(1) + '%' : '';
+      const remainEl = document.getElementById(`${prefix}-remain-text`);
+      if (remain) {
+        remainEl.textContent = remain.text;
+        remainEl.style.color = remain.charging ? '#4ade80' : '#f87171';
+      } else {
+        remainEl.textContent = '';
+      }
     }
 
     let reqId = 0;
@@ -2559,33 +2573,44 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('pct').textContent = (d.percent != null ? d.percent.toFixed(1) : '--') + '%';
         document.getElementById('dur').textContent = d.remain_duration || '--';
 
+        // "Llena a las" se muestra pegado al tiempo restante del aro (antes
+        // vivía en la eta-box de la derecha) — mismo dato, nuevo lugar.
+        const pctEta = document.getElementById('pct-eta');
+        pctEta.textContent = d.eta_text || '';
+        pctEta.className = 'pct-eta ' + (d.eta_ok ? 'eta-ok' : 'eta-warn');
+
+        document.getElementById('last-ac-short').textContent = d.last_ac_short || 'sin registro';
+
+        // La eta-box ahora solo aloja las dos alertas accionables: batería
+        // baja (threshold_text) y Meta — "Llena a las" y "última vez que
+        // llegó AC" son puramente informativos y ya se muestran en el
+        // diagrama principal (ver arriba y el nodo AC).
         const etaBox = document.getElementById('eta-box');
         const etaGoal = document.getElementById('eta-goal');
-        if (d.eta_text) {
-          etaBox.classList.add('visible');
-          const etaMain = document.getElementById('eta-main');
-          etaMain.textContent = d.eta_text;
-          etaMain.className = 'eta-main ' + (d.eta_ok ? 'eta-ok' : 'eta-warn');
-          const etaSub = document.getElementById('eta-sub');
-          if (d.threshold_text) {
-            etaSub.innerHTML = batteryIcon('discharging') + d.threshold_text;
-          } else {
-            etaSub.textContent = d.last_ac_text || '';
-          }
-        } else if (!d.goal_label) {
-          etaBox.classList.remove('visible');
+        const etaSub = document.getElementById('eta-sub');
+        if (d.threshold_text) {
+          etaSub.innerHTML = batteryIcon('discharging') + d.threshold_text;
+          etaSub.style.display = '';
+        } else {
+          etaSub.innerHTML = '';
+          etaSub.style.display = 'none';
         }
 
         // Meta/checkpoint del próximo horario del plan — misma proyección
         // que ya usa /cargas (_project_to_checkpoint), integrada dentro de
         // la misma caja de eta en vez de una caja aparte.
         if (d.goal_label) {
-          etaBox.classList.add('visible');
           const icon = d.goal_met ? '✅' : '⚠️';
           etaGoal.textContent = `${icon} Meta: ${d.goal_floor}% para ${d.goal_label} (proyectás ${d.goal_projected.toFixed(0)}%)`;
-          etaGoal.className = 'eta-goal ' + (d.goal_met ? 'eta-ok' : 'eta-warn');
+          etaGoal.className = 'eta-goal ' + (d.goal_met ? 'eta-ok' : 'eta-warn') + (d.threshold_text ? ' with-border' : '');
         } else {
           etaGoal.textContent = '';
+        }
+
+        if (d.threshold_text || d.goal_label) {
+          etaBox.classList.add('visible');
+        } else {
+          etaBox.classList.remove('visible');
         }
 
         document.getElementById('in-w').textContent = (d.in_w ?? '--') + ' W';
@@ -2631,6 +2656,7 @@ DASHBOARD_HTML = """<!doctype html>
         lateralCircle.className = 'icon-circle' + (lateralState !== 'neutral' ? ' ' + lateralState : '');
         document.getElementById('flow-lateral-charge').classList.toggle('active', lateralCharging);
         document.getElementById('flow-lateral-discharge').classList.toggle('active', lateralDischarging);
+        setLateralStats('lateral', d.soc_extra, d.extra_remain);
 
         // Nodo lateral izquierdo (espejo del de arriba, pero para la carga/
         // descarga PROPIA de la Delta 2, no la batería extra): misma lógica,
@@ -2649,6 +2675,7 @@ DASHBOARD_HTML = """<!doctype html>
         delta2Circle.className = 'icon-circle' + (delta2State !== 'neutral' ? ' ' + delta2State : '');
         document.getElementById('flow-delta2-charge').classList.toggle('active', delta2Charging);
         document.getElementById('flow-delta2-discharge').classList.toggle('active', delta2Discharging);
+        setLateralStats('delta2', d.soc_delta2, d.delta2_remain);
 
         // Overlay de flujo animado (líneas conectoras): solo se anima la
         // línea del nodo cuyo wattage actual supera el piso de ruido.
@@ -2661,25 +2688,6 @@ DASHBOARD_HTML = """<!doctype html>
         document.getElementById('flow-ac-out').classList.toggle('active', acOutActive);
         document.getElementById('flow-usb-out').classList.toggle('active', usbActive);
 
-        function remainHtml(remain) {
-          if (!remain) return '';
-          const color = remain.charging ? '#4ade80' : '#f87171';
-          return ` · <span style="color:${color};font-weight:600">${remain.text}</span>`;
-        }
-
-        // Sin "Carga"/"Descarga" ni W en la tarjeta: ese estado ya lo dice
-        // el color del ícono del gancho al lado del anillo, y el W de
-        // entrada/salida ya está ahí también — acá solo % y tiempo restante.
-        let batHtml = '';
-        if (d.soc_delta2 != null) {
-          const f = batteryFlow(d.delta2_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Delta 2<div class="sub">${remainHtml(d.delta2_remain).replace(/^ · /, '')}</div></div></div><div class="val ${f.cls}">${d.soc_delta2.toFixed(1)}%</div></div>`;
-        }
-        if (d.soc_extra != null) {
-          const f = batteryFlow(d.extra_net_w);
-          batHtml += `<div class="battery-row"><div class="name">${batteryIcon(f.state)}<div>Batería Extra<div class="sub">${remainHtml(d.extra_remain).replace(/^ · /, '')}</div></div></div><div class="val ${f.cls}">${d.soc_extra.toFixed(1)}%</div></div>`;
-        }
-        document.getElementById('batteries').innerHTML = batHtml;
 
         // El fetch HTTP respondió, pero eso solo dice que el servidor está
         // vivo — no que la telemetría MQTT de la Delta 2 sea fresca. d.stale
