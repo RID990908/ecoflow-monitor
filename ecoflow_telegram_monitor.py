@@ -2074,7 +2074,7 @@ DASHBOARD_HTML = """<!doctype html>
   .icons-row { width: 100%; max-width: 380px; display: flex; justify-content: space-around; margin-bottom: 14px; }
   .icon-item { display: flex; flex-direction: column; align-items: center; width: 84px; }
   .icon-name { font-size: 10px; color: #6b7684; margin-top: 2px; letter-spacing: .3px; text-transform: uppercase; }
-  .last-ac-short { font-size: 11px; color: #6b7684; text-align: center; margin-bottom: 6px; }
+  .icon-note { font-size: 10px; color: #6b7684; margin-top: 1px; }
   .icon-circle {
     width: 52px; height: 52px; border-radius: 50%; background: #1c232b;
     display: flex; align-items: center; justify-content: center; font-size: 22px;
@@ -2259,12 +2259,6 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="io-col out"><div class="io-label" id="out-label">Salida <svg class="io-svg" viewBox="0 0 24 24" width="14" height="14"><path d="M12 21V11m0 0l-4 4m4-4l4 4M4 5h16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="io-value" id="out-w">-- W</div></div>
   </div>
 
-  <!-- Última vez que llegó AC, formato corto ("hace Xh") — antes vivía en
-       la eta-box de la derecha, movida acá (centrada, entre el header de
-       Entrada/Salida y la fila de íconos AC/Solar) a pedido del usuario.
-       KEEP IN SYNC WITH App.tsx. -->
-  <div class="last-ac-short" id="last-ac-short"></div>
-
   <!-- GEOMETRY SPEC (top, mirrored, manifold/elbow style): sdd/power-flow-bottom-nodes/design §4 —
        viewBox 0 0 300 130, hub (150,122) at the ring's top edge, nodes
        x=50/250 y=8 (bottom-center of each top node). AC and Solar are the
@@ -2284,6 +2278,7 @@ DASHBOARD_HTML = """<!doctype html>
         <div class="icon-circle" id="ac-circle">🔌</div>
         <div class="icon-watts" id="ac-w">0 W</div>
         <div class="icon-dir" id="ac-status"></div>
+        <div class="icon-note" id="ac-note"></div>
         <div class="icon-name">AC</div>
       </div>
       <div class="icon-item">
@@ -2579,7 +2574,7 @@ DASHBOARD_HTML = """<!doctype html>
         pctEta.textContent = d.eta_text || '';
         pctEta.className = 'pct-eta ' + (d.eta_ok ? 'eta-ok' : 'eta-warn');
 
-        document.getElementById('last-ac-short').textContent = d.last_ac_short || 'sin registro';
+        document.getElementById('ac-note').textContent = d.last_ac_short || 'sin registro';
 
         // La eta-box ahora solo aloja las dos alertas accionables: batería
         // baja (threshold_text) y Meta — "Llena a las" y "última vez que
