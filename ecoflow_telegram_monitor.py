@@ -67,7 +67,7 @@ SN_EXTRA = os.environ.get("ECOFLOW_SN_EXTRA", "").strip()
 BOT_TOKEN = require_env("TELEGRAM_BOT_TOKEN")
 CHAT_ID = require_env("TELEGRAM_CHAT_ID")
 AC_CHECK_MINUTES = float(os.environ.get("AC_CHECK_MINUTES", "1"))
-AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC" (mismo valor que NOISE_FLOOR_W mas abajo, no consolidado: este mide solo el puerto AC de entrada, NOISE_FLOOR_W se usa para flujos de potencia en general)
+AC_WATTS_THRESHOLD = 5  # por debajo de esto se considera "no está cargando por AC"; solo mide el puerto AC para el texto de la alerta de Telegram
 
 # Railway corre en UTC; esto es solo para mostrar horas locales (hora estimada
 # de autonomía, bloques del plan de cargas). zoneinfo maneja el horario de
@@ -480,7 +480,6 @@ def get_ac_watts(data: dict):
     return _pick(data, "inv.inputWatts")
 
 
-NOISE_FLOOR_W = 5  # por debajo de esto es ruido de medición, no transferencia real (ver AC_WATTS_THRESHOLD arriba, mismo valor pero para el puerto AC especificamente)
 EXTRA_BATTERY_STALE_MINUTES = 5  # sin campos bms_slave.* reales por más de esto = se trata como desconectada
 AC_VOLTAGE_THRESHOLD_MV = 50000  # ~50V; AC real ronda 110000-240000 mV, esto solo filtra ausencia/ruido
 
@@ -504,7 +503,7 @@ def classify_ac_and_battery_watts(data: dict, pv_w) -> tuple:
         return (get_ac_watts(data) or 0), 0
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
     gap = total_in_w - (pv_w or 0)
-    return 0, (max(0, round(gap)) if gap > NOISE_FLOOR_W else 0)
+    return 0, max(0, round(gap))
 
 
 def get_extra_battery_soc(data: dict):
@@ -587,11 +586,11 @@ def _charge_source(pv_w, ac_present, ac_w, system_net_w) -> tuple:
     por", porque no está entrando energía neta a la batería aunque el cable
     siga puesto. Usa el neto de TODO el sistema, no solo el de la Delta 2,
     porque la batería que ayuda puede ser la extra."""
-    has_solar = bool(pv_w and pv_w > NOISE_FLOOR_W)
+    has_solar = bool(pv_w and pv_w > 0)
     if ac_present:
-        verb = "Cargando por" if ac_w and ac_w > NOISE_FLOOR_W else "Usando"
+        verb = "Cargando por" if ac_w and ac_w > 0 else "Usando"
         return verb, "🔌"
-    battery_helping = system_net_w is not None and system_net_w < -NOISE_FLOOR_W
+    battery_helping = system_net_w is not None and system_net_w < 0
     if has_solar and battery_helping:
         return "Usando", "☀️/🔋"
     if has_solar:
@@ -602,9 +601,9 @@ def _charge_source(pv_w, ac_present, ac_w, system_net_w) -> tuple:
 def _battery_flow_emoji(net_w) -> tuple:
     """(emoji_batería, etiqueta, sufijo_texto) según el neto: 🔋 + Carga + 🔌 si
     carga, 🪫 + Descarga si descarga, 🔋 + Carga si no hay flujo."""
-    if net_w is None or -NOISE_FLOOR_W <= net_w <= NOISE_FLOOR_W:
+    if net_w is None or net_w == 0:
         return "🔋", "Carga", ""
-    if net_w > NOISE_FLOOR_W:
+    if net_w > 0:
         return "🔋", "Carga", f" ({round(net_w)} W)"
     return "🪫", "Descarga", f" ({abs(round(net_w))} W)"
 
@@ -615,7 +614,7 @@ def _combined_line(soc_delta2, soc_extra, system_net_w) -> str:
     if soc_delta2 is None or soc_extra is None:
         return ""
     avg = round((soc_delta2 + soc_extra) / 2, 1)
-    emoji = "🪫" if system_net_w is not None and system_net_w < -NOISE_FLOOR_W else "🔋"
+    emoji = "🪫" if system_net_w is not None and system_net_w < 0 else "🔋"
     return f"{emoji} *Total del sistema*: *{avg:.1f}%*"
 
 
@@ -627,7 +626,7 @@ def _battery_remain(soc, net_w) -> dict | None:
     separado, no el combinado): si está cargando, cuánto falta para
     llegar al 100%; si está descargando, cuánto le queda de autonomía.
     Misma estimación lineal que el resto del bot (watts constantes)."""
-    if soc is None or net_w is None or abs(net_w) <= NOISE_FLOOR_W:
+    if soc is None or net_w is None or net_w == 0:
         return None
     charging = net_w > 0
     target = 100 if charging else 0
@@ -641,7 +640,7 @@ def _time_to_threshold_eta(soc, net_w, num_batteries, threshold):
     dispositivo) en que la carga llega al umbral de batería baja configurado
     con /alerta, o None si no aplica (cargando, ya por debajo del umbral, o
     datos faltantes)."""
-    if soc is None or net_w is None or net_w >= -NOISE_FLOOR_W or soc <= threshold:
+    if soc is None or net_w is None or net_w >= 0 or soc <= threshold:
         return None
     capacity_wh = BATTERY_CAPACITY_WH * num_batteries
     energy_to_burn_wh = capacity_wh * (soc - threshold) / 100
@@ -768,7 +767,7 @@ def _gather_metrics(passive: bool = False) -> dict:
     data = get_device_quota_cached(SN_DELTA2) if passive else get_device_quota(SN_DELTA2)
 
     def _nf(v):
-        return int(v) if v is not None and v > NOISE_FLOOR_W else 0
+        return int(v) if v is not None and v > 0 else 0
 
     soc_delta2 = _pick(data, "bms_bmsStatus.f32ShowSoc", "bms_bmsStatus.soc", "pd.soc", "bmsMaster.soc")
     # Si hace rato que no llega ningún campo bms_slave.* real, la batería
@@ -850,7 +849,7 @@ def _gather_metrics(passive: bool = False) -> dict:
         avg_soc = None
 
     remain = None
-    is_stable = abs(total_in_w - out_w) <= NOISE_FLOOR_W
+    is_stable = total_in_w == out_w
     if is_stable:
         remain = {"stable": True}
     elif remain_min:
@@ -884,7 +883,7 @@ def _gather_metrics(passive: bool = False) -> dict:
         ("USB-A", _pick(data, "pd.usb2Watts")),
         ("Auto (12V)", _pick(data, "pd.carWatts")),
     ]
-    active_ports = [{"name": name, "watts": w} for name, w in ports if w and w > NOISE_FLOOR_W]
+    active_ports = [{"name": name, "watts": w} for name, w in ports if w and w > 0]
 
     ac_out_w = _nf(ac_out_w_raw)
     usb_out_w = _nf(usb_out_w_raw)
@@ -1866,7 +1865,7 @@ def _check_battery_projection(now=None) -> None:
     label, floor, projected = proj
     cp_min, _, _ = _next_checkpoint(now)
     today = now.date()
-    if m["system_net_w"] >= -NOISE_FLOOR_W:
+    if m["system_net_w"] >= 0:
         # no está descargando neto ahora mismo: sin riesgo, se puede rearmar
         # la alerta si se había disparado antes y se recuperó
         if _projection_alerted_for.get(cp_min) == today:
@@ -2509,9 +2508,6 @@ DASHBOARD_HTML = """<!doctype html>
     <span id="mqtt-stale-text"></span>
   </div>
   <script>
-    // Mismo umbral que NOISE_FLOOR_W del lado Python (ecoflow_telegram_monitor.py):
-    // por debajo de esto se considera ruido de medición, no transferencia real.
-    const NOISE_FLOOR_W = 5;
     // Umbrales de color del ring principal (rojo/amarillo/verde). Mismos
     // valores que RING_RED_MAX_PCT/RING_YELLOW_MAX_PCT en App.tsx (Expo) —
     // si cambian acá, cambiarlos ahí también para que no queden desincronizados.
@@ -2604,7 +2600,7 @@ DASHBOARD_HTML = """<!doctype html>
         acStatus.textContent = d.has_ac ? 'Sí' : 'No';
         acStatus.className = 'icon-dir' + (d.has_ac ? ' charging' : '');
         document.getElementById('pv-w').textContent = (d.pv_w ?? '--') + ' W';
-        document.getElementById('pv-circle').className = 'icon-circle' + (d.pv_w > NOISE_FLOOR_W ? ' charging' : '');
+        document.getElementById('pv-circle').className = 'icon-circle' + (d.pv_w > 0 ? ' charging' : '');
         document.getElementById('in-label').classList.toggle('active', d.in_w > 0);
         document.getElementById('out-label').classList.toggle('active', d.out_w > 0);
 
@@ -2629,8 +2625,8 @@ DASHBOARD_HTML = """<!doctype html>
         const lateralCircle = document.getElementById('lateral-circle');
         const lateralOutW = d.extra_out_w || 0;
         const lateralInW = extraInW;
-        const lateralDischarging = lateralOutW > NOISE_FLOOR_W;
-        const lateralCharging = !lateralDischarging && lateralInW > NOISE_FLOOR_W;
+        const lateralDischarging = lateralOutW > 0;
+        const lateralCharging = !lateralDischarging && lateralInW > 0;
         const lateralW = lateralDischarging ? lateralOutW : lateralInW;
         const lateralState = lateralDischarging ? 'discharging' : lateralCharging ? 'charging' : 'neutral';
         document.getElementById('lateral-w').textContent = lateralW + ' W';
@@ -2648,8 +2644,8 @@ DASHBOARD_HTML = """<!doctype html>
         const delta2Circle = document.getElementById('delta2-circle');
         const delta2OutW = d.delta2_discharge_w || 0;
         const delta2InW = d.delta2_charge_w || 0;
-        const delta2Discharging = delta2OutW > NOISE_FLOOR_W;
-        const delta2Charging = !delta2Discharging && delta2InW > NOISE_FLOOR_W;
+        const delta2Discharging = delta2OutW > 0;
+        const delta2Charging = !delta2Discharging && delta2InW > 0;
         const delta2W = delta2Discharging ? delta2OutW : delta2InW;
         const delta2State = delta2Discharging ? 'discharging' : delta2Charging ? 'charging' : 'neutral';
         document.getElementById('delta2-w').textContent = delta2W + ' W';
@@ -2660,11 +2656,11 @@ DASHBOARD_HTML = """<!doctype html>
         setLateralStats('delta2', d.soc_delta2, d.delta2_remain);
 
         // Overlay de flujo animado (líneas conectoras): solo se anima la
-        // línea del nodo cuyo wattage actual supera el piso de ruido.
-        const acTopActive = (d.ac_w || 0) > NOISE_FLOOR_W;
-        const solarActive = (d.pv_w || 0) > NOISE_FLOOR_W;
-        const acOutActive = acOutW > NOISE_FLOOR_W;
-        const usbActive = usbOutW > NOISE_FLOOR_W;
+        // línea del nodo cuyo wattage actual es mayor a 0.
+        const acTopActive = (d.ac_w || 0) > 0;
+        const solarActive = (d.pv_w || 0) > 0;
+        const acOutActive = acOutW > 0;
+        const usbActive = usbOutW > 0;
         document.getElementById('flow-ac-top').classList.toggle('active', acTopActive);
         document.getElementById('flow-solar-top').classList.toggle('active', solarActive);
         document.getElementById('flow-ac-out').classList.toggle('active', acOutActive);
