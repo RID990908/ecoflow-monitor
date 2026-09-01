@@ -2039,7 +2039,7 @@ DASHBOARD_HTML = """<!doctype html>
      longer needs to give anything up — restored to 240px, and
      .pct/.pct-sub/.dur font sizes below are scaled back up proportionally
      (reversing the earlier x0.79 shrink) to match. */
-  .ring-wrap { position: relative; width: 240px; height: 240px; flex-shrink: 0; margin: 6px 0 8px; }
+  .ring-wrap { position: relative; width: 240px; height: 240px; flex-shrink: 0; margin: 6px 0 0; }
   /* The ring is centered ON ITS OWN via the body's flex column
      (align-items:center) — same simple centering the AC/Solar and CA/USB
      rows rely on. It is NOT wrapped in a shared flex row with the lateral
@@ -2049,7 +2049,7 @@ DASHBOARD_HTML = """<!doctype html>
      via .lateral-overlay, anchored to .ring-wrap's own box (position:
      relative) but positioned absolute so it doesn't affect centering. */
   .flow-top-wrap { position: relative; width: 300px; max-width: 100%; margin: 0 auto 4px; padding-bottom: 122px; }
-  .flow-bottom-wrap { position: relative; width: 300px; max-width: 100%; margin: 4px auto 0; padding-top: 122px; }
+  .flow-bottom-wrap { position: relative; width: 300px; max-width: 100%; margin: 0 auto 0; padding-top: 122px; }
   .flow-connectors { position: absolute; left: 0; width: 100%; height: 130px; pointer-events: none; top: 0; }
   .flow-connectors.top { top: auto; bottom: 0; }
   .flow-overlay {
