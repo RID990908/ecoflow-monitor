@@ -146,6 +146,8 @@ def _save_persisted_state() -> None:
                     "device_state": DEVICE_STATE,
                     "device_charged": DEVICE_CHARGED,
                     "ecoplay_pct": ECOPLAY_LAST_PCT,
+                    "data_stale_alerted": _DATA_STALE_ALERTED,
+                    "stale_ack_by_user": STALE_ACK_BY_USER,
                 },
                 f,
             )
@@ -175,7 +177,8 @@ DEVICE_CHARGED = {
 # — no hay nada que reordenar en un grupo de uno).
 DEVICE_CHARGED["ecoplay"] = bool(_saved_device_charged.get("ecoplay", False))
 ECOPLAY_LAST_PCT = _persisted.get("ecoplay_pct")
-_DATA_STALE_ALERTED = False
+_DATA_STALE_ALERTED = _persisted.get("data_stale_alerted", False)
+STALE_ACK_BY_USER = _persisted.get("stale_ack_by_user", False)
 
 # --- Estado del cliente MQTT privado (solo si USE_PRIVATE_API) ---
 _mqtt_client = None
@@ -991,6 +994,8 @@ HELP_TEXT = (
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/ecoplay <porcentaje> — hasta qué hora aguanta la batería propia de la Ecoplay/WiFi "
     "(35-45 W) para llegar a las 7:30 AM (ej: /ecoplay 86)\n"
+    "/fuiyo — si apagaste vos la Delta 2 y te llegó el aviso de \"no recibo datos\", "
+    "mandá esto para que no te siga avisando hasta que vuelva\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
     f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
@@ -1041,7 +1046,7 @@ def _resolve_device_keys(word: str) -> list:
 
 
 def handle_command(text: str, chat_id: str) -> None:
-    global BATTERY_LOW_THRESHOLD, ECOPLAY_LAST_PCT
+    global BATTERY_LOW_THRESHOLD, ECOPLAY_LAST_PCT, STALE_ACK_BY_USER
     parts = text.strip().split()
     cmd = parts[0].split("@")[0].lower()
     if cmd == "/reporte":
@@ -1115,6 +1120,20 @@ def handle_command(text: str, chat_id: str) -> None:
             BATTERY_LOW_THRESHOLD = int(parts[1])
             _save_persisted_state()
             send_telegram(f"🔔 Te voy a avisar cuando la carga baje de {BATTERY_LOW_THRESHOLD}%.", chat_id=chat_id)
+    elif cmd == "/fuiyo":
+        is_stale, _ = _mqtt_staleness()
+        if not is_stale:
+            send_telegram("No hay ningún corte activo ahora mismo, no hace falta.", chat_id=chat_id)
+        elif STALE_ACK_BY_USER:
+            send_telegram("Ya sabía, sigo sin avisarte hasta que vuelva.", chat_id=chat_id)
+        else:
+            STALE_ACK_BY_USER = True
+            _save_persisted_state()
+            send_telegram(
+                "👍 Anotado. No te aviso más de este corte — sigo chequeando solo, "
+                "y en cuanto vuelva a recibir datos te confirmo.",
+                chat_id=chat_id,
+            )
     elif cmd == "/start":
         send_telegram(START_TEXT, chat_id=chat_id)
     elif cmd == "/help":
@@ -1348,32 +1367,51 @@ WATCHDOG_CHECK_MINUTES = 5
 WATCHDOG_STALE_MINUTES = 5  # sin datos frescos por más de esto = alerta
 
 
+def _mqtt_staleness() -> tuple:
+    """(is_stale, minutos_sin_dato). Mismo criterio en watchdog_timer, /api/status
+    y /fuiyo — antes estaba duplicado entre los primeros dos, ahora es uno solo."""
+    with _mqtt_cache_lock:
+        entry = _device_cache.get(SN_DELTA2, {})
+        updated_at = entry.get("updated_at", 0)
+    stale_for_min = (time.time() - updated_at) / 60 if updated_at else None
+    is_stale = stale_for_min is None or stale_for_min > WATCHDOG_STALE_MINUTES
+    return is_stale, stale_for_min
+
+
 def watchdog_timer() -> None:
     """Avisa si dejamos de recibir datos del dispositivo por MQTT (conexión
     caída, credenciales vencidas, etc.) — sin esto, un corte silencioso solo
-    se nota cuando el usuario nota que dejaron de llegar informes."""
-    global _DATA_STALE_ALERTED
+    se nota cuando el usuario nota que dejaron de llegar informes.
+
+    Si el usuario apagó la planta a propósito, /fuiyo pone
+    STALE_ACK_BY_USER=True: acá se sigue chequeando cada
+    WATCHDOG_CHECK_MINUTES igual que siempre (por eso no hace falta nada
+    especial para "la señal silenciosa"), pero no se manda el ⚠️ de nuevo.
+    Cuando los datos vuelven, si hubo alerta o ack pendiente se avisa una
+    sola vez y se limpian los dos flags."""
+    global _DATA_STALE_ALERTED, STALE_ACK_BY_USER
     while True:
         time.sleep(WATCHDOG_CHECK_MINUTES * 60)
         if not ECOFLOW_READY or not USE_PRIVATE_API:
             continue
-        with _mqtt_cache_lock:
-            entry = _device_cache.get(SN_DELTA2, {})
-            updated_at = entry.get("updated_at", 0)
-        stale_for_min = (time.time() - updated_at) / 60 if updated_at else None
-        is_stale = stale_for_min is None or stale_for_min > WATCHDOG_STALE_MINUTES
+        is_stale, stale_for_min = _mqtt_staleness()
         try:
-            if is_stale and not _DATA_STALE_ALERTED:
+            if is_stale and not _DATA_STALE_ALERTED and not STALE_ACK_BY_USER:
                 minutos = f"{stale_for_min:.0f}" if stale_for_min is not None else "varios"
                 send_telegram(
                     f"⚠️ No recibo datos de la Delta 2 hace {minutos} min. "
-                    "Puede ser un corte de conexión MQTT o que las credenciales vencieron."
+                    "Puede ser un corte de conexión MQTT o que las credenciales vencieron.\n\n"
+                    "Si la apagaste vos, mandá /fuiyo y no te vuelvo a avisar hasta que "
+                    "vuelva a recibir datos."
                 )
                 _DATA_STALE_ALERTED = True
+                _save_persisted_state()
                 log.warning("Watchdog: datos viejos hace %s min, alertado", minutos)
-            elif not is_stale and _DATA_STALE_ALERTED:
+            elif not is_stale and (_DATA_STALE_ALERTED or STALE_ACK_BY_USER):
                 send_telegram("✅ Volví a recibir datos de la Delta 2 con normalidad.")
                 _DATA_STALE_ALERTED = False
+                STALE_ACK_BY_USER = False
+                _save_persisted_state()
                 log.info("Watchdog: datos frescos de nuevo, alerta resuelta")
         except Exception:
             log.exception("Error en el watchdog de datos")
@@ -1433,14 +1471,16 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detail: str = "") -> str:
+def _status_line(emoji: str, label: str, plan_ok, device_keys: list, detail: str = "") -> str:
     """Une los dos conceptos que antes se confundían bajo el mismo 'ON/OFF':
     el semáforo (🟢/🔴) es lo que dice el PLAN (¿se puede tener encendido
     ahora?), y el texto ON/OFF es lo que vos marcaste de verdad con
     /on-/off — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
     dice que había que apagarlo pero lo tenés marcado prendido). Para nevera,
-    laptop y ecoplay (una sola unidad cada una)."""
-    dot = "🟢" if plan_ok else "🔴"
+    laptop y ecoplay (una sola unidad cada una). plan_ok=None (solo posible
+    en ecoplay, ver DEVICE_CHARGED) significa "ya cargada, no compite por el
+    excedente" -> 🔋 en vez de 🟢/🔴."""
+    dot = "🔋" if plan_ok is None else ("🟢" if plan_ok else "🔴")
     state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
     line = f"{emoji} {label}: {dot} {state_text}"
     if detail:
@@ -1450,22 +1490,28 @@ def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detai
 
 def _multi_unit_fits(device_keys: list, available_w) -> tuple:
     """Núcleo de asignación para dispositivos multi-unidad (ventilador/power
-    bank): ordena por `charged` (las NO cargadas entran primero — ver
-    DEVICE_CHARGED, es la redirección de excedente hacia lo descargado) y va
-    descontando el watiaje de cada unidad del excedente disponible en ese
-    orden. Devuelve (dict[key, bool] de si esa unidad entra ahora mismo,
-    dict[key, int] de cuánto le falta si NO entra (0 si entra), excedente
-    restante para lo que venga después en la cadena de prioridad). Separado
-    de _multi_unit_line para que _compute_device_fits (el punto 🟢/🔴 y el
+    bank). Las unidades marcadas `cargada` (ver DEVICE_CHARGED) no compiten
+    por el excedente para nada: ya tienen su propia batería llena, así que
+    no hace falta prenderlas contra el sistema — quedan con fits=None (sin
+    punto 🟢/🔴, ver _multi_unit_line/_compute_device_fits) y no restan del
+    presupuesto. Solo las NO cargadas entran a la cola, en orden, y van
+    descontando su watiaje del excedente disponible. Devuelve (dict[key,
+    bool|None] de si esa unidad entra ahora mismo, dict[key, int] de cuánto
+    le falta si NO entra (0 si entra o si está cargada), excedente restante
+    para lo que venga después en la cadena de prioridad). Separado de
+    _multi_unit_line para que _compute_device_fits (el punto 🟢/🔴 y el
     déficit en W que se pegan a cada fila de "Qué tienes encendido") pueda
     reusar exactamente esta misma asignación sin duplicar el orden/sorteo —
     si esto cambia, tanto el mensaje del bot como el punto por fila quedan
     consistentes automáticamente."""
     remaining = max(0, available_w) if available_w is not None else 0
-    priority = sorted(device_keys, key=lambda k: DEVICE_CHARGED.get(k, False))
     fit_by_key = {}
     deficit_by_key = {}
-    for key in priority:
+    for key in device_keys:
+        if DEVICE_CHARGED.get(key, False):
+            fit_by_key[key] = None
+            deficit_by_key[key] = 0
+            continue
         watts = DEVICE_INFO[key]["watts"]
         if watts <= remaining:
             fit_by_key[key] = True
@@ -1496,7 +1542,13 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
     sistema, es lo que queda para ESTA carga en particular."""
     original_available = max(0, available_w) if available_w is not None else 0
     fit_by_key, _deficit_by_key, remaining = _multi_unit_fits(device_keys, original_available)
-    dot_by_key = {k: ("🟢" if fit_by_key[k] else "🔴") for k in device_keys}
+    # Cargada -> 🔋 (ya tiene su propia batería llena, no compite por el
+    # excedente ni hace falta encenderla contra el sistema). Sin cargar ->
+    # 🟢/🔴 según si entra en el excedente actual (ver _multi_unit_fits).
+    dot_by_key = {
+        k: ("🔋" if fit_by_key[k] is None else ("🟢" if fit_by_key[k] else "🔴"))
+        for k in device_keys
+    }
     dots = [dot_by_key[key] for key in device_keys]  # render in original order
     on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
     if on_count == len(device_keys):
@@ -1507,9 +1559,19 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
             for dot, key in zip(dots, device_keys)
         )
     line = f"{emoji} {label}: {dots_str}"
-    actionable = any(DEVICE_STATE.get(key) and dot == "🔴" for key, dot in zip(device_keys, dots))
+    # Solo cuenta como "acción pendiente" (y solo se suma al presupuesto
+    # necesario) lo que está prendido, en rojo, Y NO cargado — una unidad
+    # cargada y prendida corre de su propia batería, no le pide nada al
+    # sistema aunque el usuario la tenga marcada ON.
+    actionable = any(
+        DEVICE_STATE.get(key) and fit_by_key[key] is False for key in device_keys
+    )
     if actionable:
-        needed = sum(DEVICE_INFO[key]["watts"] for key in device_keys if DEVICE_STATE.get(key))
+        needed = sum(
+            DEVICE_INFO[key]["watts"]
+            for key in device_keys
+            if DEVICE_STATE.get(key) and fit_by_key[key] is not None
+        )
         line += f" — necesitas {needed} W, tienes {round(original_available)} W"
     return line, remaining
 
@@ -1606,6 +1668,8 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
         return info, remaining
 
     def _ecoplay_fits(available_w):
+        if DEVICE_CHARGED.get("ecoplay", False):
+            return {"fits": None, "deficit_w": 0}, available_w
         watts = DEVICE_INFO["ecoplay"]["watts"]
         ok, _detail, remaining = _allocate_budget(watts, available_w)
         info = {"fits": ok, "deficit_w": 0 if ok else round(watts - remaining)}
@@ -1689,6 +1753,9 @@ def build_load_advisor_message(m: dict = None) -> str:
             return ok, detail, remaining
 
         def _allocate_ecoplay(available_w):
+            if DEVICE_CHARGED.get("ecoplay", False):
+                line = _status_line("📡", "Ecoplay", None, ["ecoplay"]) + _ecoplay_cargas_suffix(now)
+                return line, available_w
             ok, detail, remaining = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available_w)
             if ok or not DEVICE_STATE.get("ecoplay"):
                 detail = ""
@@ -1979,15 +2046,12 @@ def get_dashboard_status() -> dict:
         eta_text = f"Llena a las {r['eta']}" if eta_ok else f"Dura hasta las {r['eta']}"
         remain_duration = f"{r['hours']}h {r['minutes']}m"
 
-    # Staleness real de la telemetría MQTT: mismo criterio que watchdog_timer
-    # (línea ~1112), no solo "el fetch HTTP al propio servidor respondió".
+    # Staleness real de la telemetría MQTT (ver _mqtt_staleness, mismo criterio
+    # que watchdog_timer), no solo "el fetch HTTP al propio servidor respondió".
     # Sin esto el dashboard mostraba "conectado" con MQTT caído hace horas,
     # porque el HTTP local seguía respondiendo con el último cache guardado.
-    with _mqtt_cache_lock:
-        entry = _device_cache.get(SN_DELTA2, {})
-        updated_at = entry.get("updated_at", 0)
-    stale_minutes = round((datetime.now(TZ).timestamp() - updated_at) / 60, 1) if updated_at else None
-    is_stale = stale_minutes is None or stale_minutes > WATCHDOG_STALE_MINUTES
+    is_stale, stale_minutes = _mqtt_staleness()
+    stale_minutes = round(stale_minutes, 1) if stale_minutes is not None else None
 
     now = datetime.now(TZ)
     goal_label = goal_floor = goal_projected = goal_met = None
