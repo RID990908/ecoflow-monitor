@@ -2260,6 +2260,7 @@ DASHBOARD_HTML = """<!doctype html>
   .lateral-pct { font-size: 12px; font-weight: 700; color: #e5e7eb; margin-top: 3px; font-variant-numeric: tabular-nums; }
   .lateral-remain { font-size: 10px; font-weight: 600; margin-top: 1px; font-variant-numeric: tabular-nums; }
   .usb-svg { flex-shrink: 0; color: #9aa4af; }
+  .tower-svg { flex-shrink: 0; color: #9aa4af; }
   .devices { width: 100%; max-width: 380px; margin-top: 10px; }
   .devices .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
   .device-btn {
@@ -2341,7 +2342,7 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="flow-top-wrap">
     <div class="icons-row top">
       <div class="icon-item">
-        <div class="icon-circle" id="ac-circle">🔌</div>
+        <div class="icon-circle" id="ac-circle"><svg class="tower-svg" viewBox="0 0 24 24" width="22" height="22"><path d="M12,2 L15,6 L9,6 Z" fill="currentColor"/><path d="M9,6 L6,22 M15,6 L18,22 M6,22 L3,22 M18,22 L21,22 M7,10 L17,10 M6,15 L18,15 M9,10 L15,15 M15,10 L9,15" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg></div>
         <div class="icon-watts" id="ac-w">0 W</div>
         <div class="icon-dir" id="ac-status"></div>
         <div class="icon-note" id="ac-note"></div>
@@ -2520,7 +2521,7 @@ DASHBOARD_HTML = """<!doctype html>
     </svg>
     <div class="icons-row bottom">
       <div class="icon-item">
-        <div class="icon-circle">🔌</div>
+        <div class="icon-circle"><svg class="tower-svg" viewBox="0 0 24 24" width="22" height="22"><path d="M12,2 L15,6 L9,6 Z" fill="currentColor"/><path d="M9,6 L6,22 M15,6 L18,22 M6,22 L3,22 M18,22 L21,22 M7,10 L17,10 M6,15 L18,15 M9,10 L15,15 M15,10 L9,15" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg></div>
         <div class="icon-watts" id="ac-out-w">0 W</div>
         <div class="icon-name">CA</div>
       </div>
@@ -2621,7 +2622,12 @@ DASHBOARD_HTML = """<!doctype html>
           return;
         }
         document.getElementById('source-verb').textContent = d.source_verb;
-        document.getElementById('source-emoji').textContent = d.source_emoji;
+        const sourceEmojiEl = document.getElementById('source-emoji');
+        if (d.source_emoji === '🔌') {
+          sourceEmojiEl.innerHTML = '<svg class="tower-svg" viewBox="0 0 24 24" width="22" height="22"><path d="M12,2 L15,6 L9,6 Z" fill="currentColor"/><path d="M9,6 L6,22 M15,6 L18,22 M6,22 L3,22 M18,22 L21,22 M7,10 L17,10 M6,15 L18,15 M9,10 L15,15 M15,10 L9,15" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>';
+        } else {
+          sourceEmojiEl.textContent = d.source_emoji;
+        }
 
         const pct = d.percent != null ? d.percent : 0;
         const ring = document.getElementById('ring');
