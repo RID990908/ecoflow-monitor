@@ -2468,6 +2468,12 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="updated">
+    <span class="live-dot" id="live-dot"></span>
+    <span id="updated-text"></span>
+    <span id="mqtt-stale-text"></span>
+  </div>
+
   <div class="eta-box" id="eta-box">
     <div class="eta-goal" id="eta-goal"></div>
   </div>
@@ -2500,12 +2506,6 @@ DASHBOARD_HTML = """<!doctype html>
   <div class="devices">
     <div class="title">Qué tienes encendido</div>
     <div id="devices"></div>
-  </div>
-
-  <div class="updated">
-    <span class="live-dot" id="live-dot"></span>
-    <span id="updated-text"></span>
-    <span id="mqtt-stale-text"></span>
   </div>
   <script>
     // Umbrales de color del ring principal (rojo/amarillo/verde). Mismos
