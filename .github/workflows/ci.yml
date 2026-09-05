@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  sanity-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile-check all modules
+        run: >
+          python -m py_compile
+          ecoflow_telegram_monitor.py
+          ecoflow_api.py
+          mqtt_client.py
+          dashboard_server.py
+          telegram_bot.py
+          shared_state.py
