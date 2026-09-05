@@ -2,6 +2,37 @@
 
 Bot de Telegram + dashboard web que monitorea en tiempo real una EcoFlow Delta 2 (con una batería extra conectada) y manda informes y alertas automáticas. Corre 24/7 como un único proceso en Railway, sin depender de que ninguna PC esté prendida.
 
+## English Overview
+
+A Telegram bot + live web dashboard that monitors an EcoFlow Delta 2 power station (plus an extra connected battery) in real time, sending automatic reports and alerts. Runs 24/7 as a single Python process on Railway — no dependency on any PC being on. It talks to the EcoFlow Delta 2 over the same "Private API" the official mobile app uses (MQTT + reverse-engineered auth), since EcoFlow's official developer API has an unresolved device-authorization bug (see "Por qué 'Private API'..." below for the full story).
+
+**Tech stack**
+
+| Layer | Tech |
+| --- | --- |
+| Language | Python (no version pin in this repo; CI runs 3.11, works on 3.11+) |
+| Messaging | Telegram Bot API (long-polling) |
+| Telemetry | MQTT via `paho-mqtt`, against EcoFlow's own broker (`mqtt-e.ecoflow.com`) |
+| HTTP dashboard | Python stdlib `http.server` (no web framework) |
+| Deployment | Railway (worker process, `Procfile`) |
+
+**Setup walkthrough**
+
+1. Create a Telegram bot via [@BotFather](https://t.me/BotFather) and grab the bot token.
+2. Get your chat ID (e.g. via [@userinfobot](https://t.me/userinfobot)).
+3. Create an EcoFlow account (same email/password used in the official EcoFlow app).
+4. Set the required environment variables — see the [Variables de entorno](#variables-de-entorno) table below.
+5. Install dependencies: `pip install -r requirements.txt`
+6. Run it: `python ecoflow_telegram_monitor.py`
+
+**Companion app**
+
+See also: **ecoflow-monitor-app** — the companion mobile dashboard (Expo/React Native) for this same product.
+
+Full documentation below is in Spanish — jump to [Qué hace](#qué-hace) to continue.
+
+---
+
 ## Qué hace
 
 - **Informe bajo demanda** (`/reporte` en Telegram): carga de cada batería, si está cargando o descargando, entrada/salida de energía, si hay corriente conectada, puertos activos, tiempo estimado de autonomía o para llenarse, y tiempo estimado para llegar al 20%.
