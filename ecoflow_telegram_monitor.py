@@ -40,19 +40,22 @@ import shared_state
 import telegram_bot
 from shared_state import SN_DELTA2, TZ, log
 
-# --- Informe automático a las :00/:30, pausado en horario silencioso ---
+# --- Informe automático cada 45 min, solo mientras NO hay corriente (se fue
+# la luz), pausado en horario silencioso ---
+
+REPORT_INTERVAL_MINUTES = 45
 
 
 def _seconds_until_next_slot() -> float:
-    """Próximo :00 o :30 en punto (hora local), para que el informe automático
-    llegue siempre en esos horarios en vez de a minutos sueltos según cuándo
-    arrancó el contenedor."""
+    """Próximo slot de REPORT_INTERVAL_MINUTES (hora local), alineado a
+    medianoche en vez de a minutos sueltos según cuándo arrancó el contenedor.
+    Con 45 min esto da horarios como 00:00, 00:45, 01:30, 02:15, 03:00, ...
+    (no siempre en punto, pero con espaciado fijo y predecible)."""
     now = datetime.now(TZ)
-    if now.minute < 30:
-        next_slot = now.replace(minute=30, second=0, microsecond=0)
-    else:
-        next_slot = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-    return (next_slot - now).total_seconds()
+    interval = timedelta(minutes=REPORT_INTERVAL_MINUTES)
+    elapsed = now - now.replace(hour=0, minute=0, second=0, microsecond=0)
+    wait = interval - (elapsed % interval)
+    return wait.total_seconds()
 
 
 _QUIET_START_MIN = shared_state.QUIET_START_HOUR * 60 + shared_state.QUIET_START_MINUTE
@@ -72,6 +75,9 @@ def report_timer() -> None:
         time.sleep(_seconds_until_next_slot())
         if not shared_state.ECOFLOW_READY:
             log.info("Informe automático omitido (EcoFlow no configurado)")
+            continue
+        if shared_state.WAS_CHARGING_AC:
+            log.info("Informe automático omitido (hay corriente)")
             continue
         if _in_quiet_hours():
             log.info("Informe automático omitido (horario silencioso)")
@@ -353,7 +359,8 @@ def main() -> None:
         threading.Thread(target=mqtt_client.start_private_mqtt, daemon=True).start()
 
     log.info(
-        "Monitor iniciado. Informe a las :00/:30 (pausado %02d:%02d-%02d:%02d), chequeo AC cada %.1f min.",
+        "Monitor iniciado. Informe cada %d min mientras no hay corriente (pausado %02d:%02d-%02d:%02d), chequeo AC cada %.1f min.",
+        REPORT_INTERVAL_MINUTES,
         shared_state.QUIET_START_HOUR,
         shared_state.QUIET_START_MINUTE,
         shared_state.QUIET_END_HOUR,

@@ -36,7 +36,7 @@ Full documentation below is in Spanish — jump to [Qué hace](#qué-hace) to co
 ## Qué hace
 
 - **Informe bajo demanda** (`/reporte` en Telegram): carga de cada batería, si está cargando o descargando, entrada/salida de energía, si hay corriente conectada, puertos activos, tiempo estimado de autonomía o para llenarse, y tiempo estimado para llegar al 20%.
-- **Informe automático**: se manda solo a las :00 y :30 de cada hora, con un horario silencioso configurable (por defecto 23:30–07:00) en el que se pausa para no interrumpir de noche.
+- **Informe automático**: se manda cada 45 minutos, pero solo mientras no hay corriente (se fue la luz) — mientras la Delta 2 está cargando por AC no manda informes periódicos. Además tiene un horario silencioso configurable (por defecto 23:30–07:00) en el que se pausa para no interrumpir de noche.
 - **Alertas en tiempo real**:
   - ⚡ Llegó la corriente / 🔌⚠️ Se fue la luz
   - 🪫 Carga por debajo del umbral configurado (`/alerta <porcentaje>`)
@@ -53,7 +53,7 @@ Un solo proceso Python (`ecoflow_telegram_monitor.py`), varios threads daemon:
 | Thread | Qué hace |
 | --- | --- |
 | `poll_commands` | Long-polling de comandos de Telegram |
-| `report_timer` | Informe automático a las :00/:30 |
+| `report_timer` | Informe automático cada 45 min, solo mientras no hay corriente |
 | `ac_check_timer` | Chequea AC, batería baja, carga completa, acumula watts para el resumen diario |
 | `watchdog_timer` | Avisa si se cae la conexión MQTT |
 | `daily_summary_timer` | Resumen diario |

@@ -115,7 +115,7 @@ HELP_TEXT = (
     "mandá esto para que no te siga avisando hasta que vuelva\n"
     "/start — qué hace este bot\n"
     "/help — ver esta ayuda\n\n"
-    f"Informe automático a las :00 y :30 de cada hora (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
+    f"Informe automático cada 45 min mientras no hay corriente (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
     f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) — incluye el detalle de batería/puertos y, en el mismo mensaje, "
     "qué encender/apagar según el plan. Chequeo de carga AC cada "
     f"{AC_CHECK_MINUTES:g} min, también te aviso al llegar a 100% de carga.\n\n"
