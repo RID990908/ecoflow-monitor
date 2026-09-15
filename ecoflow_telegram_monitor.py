@@ -291,7 +291,7 @@ def _check_battery_projection(now=None) -> None:
         if _projection_alerted_for.get(cp_min) != today:
             # "Mejor caso": cuánto cambiaría la proyección si apagaras TODA la
             # carga discrecional marcada (laptop, ventilador, power bank —
-            # nevera/internet quedan afuera porque son protegidas). Si ni así
+            # internet queda afuera porque es protegido). Si ni así
             # se llega a la meta, decir "bajá carga" es engañoso: el problema
             # no es cuánto estás gastando, es que no hay sol suficiente.
             discretionary_keys = ["laptop"] + dashboard_server.VENTILADOR_DEVICE_KEYS + dashboard_server.POWERBANK_DEVICE_KEYS
@@ -305,7 +305,7 @@ def _check_battery_projection(now=None) -> None:
                     "⚠️ *Se está yendo de control*\n\n"
                     f"Proyectás *{projected:.0f}%* para {label} (meta {floor}%+)\n"
                     f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n\n"
-                    "Bajá carga (laptop, power bank, ventilador) — la nevera es protegida, no la toques."
+                    "Bajá carga (laptop, power bank, ventilador)."
                 )
                 _projection_alerted_for[cp_min] = today
                 log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)

@@ -104,7 +104,6 @@ def _load_persisted_state() -> dict:
 MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": (2, "Power bank", "🔋", 60)}
 
 DEVICE_INFO = {
-    "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
     "laptop": {"label": "MacBook Pro", "emoji": "", "watts": 70},
     "ecoplay": {"label": "Ecoplay", "emoji": "📡", "watts": 120},
 }

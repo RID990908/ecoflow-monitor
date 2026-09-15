@@ -478,42 +478,40 @@ def build_report(m: dict = None) -> str:
 # --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
 # 19:30, que dice qué debería estar encendido/apagado según el excedente real
 # del sistema (que cubre las 24 h: la noche solo se consulta por /cargas, el
-# timer automático no manda mensajes fuera de esa ventana). El frío
-# (congelador) se eliminó del sistema — la NEVERA tomó su rol: es la carga
-# protegida, se mantiene ON siempre salvo emergencia de batería, y se apaga
-# programado a las 12 AM (aguanta cerrada hasta el amanecer). Laptop,
+# timer automático no manda mensajes fuera de esa ventana). Laptop,
 # Ventilador, Power bank y Ecoplay se reparten el excedente real en orden de
 # prioridad (ver build_load_advisor_message) — ninguna tiene ventana horaria
 # fija, todas se evalúan contra system_net_w en el momento de la consulta.
-BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > nevera > resto
+BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > resto
 
-# El único horario fijo que queda es el apagado programado de la nevera a
-# medianoche (es la carga protegida, aguanta cerrada hasta el amanecer).
-# Laptop, power bank y ventilador ya NO tienen ventanas horarias: se
+# emergency_ok=False entre 12 AM y 6 AM: sin sol y de madrugada no tiene
+# sentido activar la emergencia de batería (ver _compute_device_fits /
+# build_load_advisor_message), es la única ventana horaria fija que queda.
+# Laptop, power bank y ventilador NO tienen ventanas horarias propias: se
 # habilitan o no según el excedente real del sistema (system_net_w) en el
 # momento de la consulta, sin importar la hora que sea. La ÚNICA excepción es
 # el ORDEN de prioridad de Laptop dentro de esa cola (ver
 # _laptop_deprioritized y build_load_advisor_message): de 2 PM a 7 AM pasa a
 # evaluarse último (después de Ventilador, Power bank y Ecoplay) en vez de
-# justo después de la Nevera — es de horario, no de encendido/apagado.
+# primero — es de horario, no de encendido/apagado.
 _LOAD_SCHEDULE = [
-    {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM", "nevera": "on",
+    {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM", "emergency_ok": True,
      "battery_goal": "Sin sol aún, ~-2%"},
-    {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM", "nevera": "on",
+    {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM", "emergency_ok": True,
      "battery_goal": "Sube lento con el primer sol"},
-    {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM", "nevera": "on",
+    {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM", "emergency_ok": True,
      "battery_goal": "~55-60% al mediodía"},
-    {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM", "nevera": "on",
+    {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM", "emergency_ok": True,
      "battery_goal": "65–75% a las 3 PM"},
-    {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM", "nevera": "on",
+    {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM", "emergency_ok": True,
      "battery_goal": "Mantener con el sol restante"},
-    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM", "nevera": "on",
-     "battery_goal": "Cerca del 100% si se mantuvo solo nevera/internet"},
-    {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM", "nevera": "on",
+    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM", "emergency_ok": True,
+     "battery_goal": "Cerca del 100% si se mantuvo solo con internet"},
+    {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM", "emergency_ok": True,
      "battery_goal": "Cerrar el día en 100%"},
-    {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM", "nevera": "on",
+    {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM", "emergency_ok": True,
      "battery_goal": "Bajando controlado"},
-    {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM", "nevera": "off_midnight",
+    {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM", "emergency_ok": False,
      "battery_goal": "Amanecer con 15%+"},
 ]
 
@@ -532,8 +530,8 @@ def _status_line(emoji: str, label: str, plan_ok, device_keys: list, detail: str
     el semáforo (🟢/🔴) es lo que dice el PLAN (¿se puede tener encendido
     ahora?), y el texto ON/OFF es lo que vos marcaste de verdad con
     /on-/off — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
-    dice que había que apagarlo pero lo tenés marcado prendido). Para nevera,
-    laptop y ecoplay (una sola unidad cada una). plan_ok=None (solo posible
+    dice que había que apagarlo pero lo tenés marcado prendido). Para laptop
+    y ecoplay (una sola unidad cada una). plan_ok=None (solo posible
     en ecoplay, ver DEVICE_CHARGED) significa "ya cargada, no compite por el
     excedente" -> 🔋 en vez de 🟢/🔴."""
     dot = "🔋" if plan_ok is None else ("🟢" if plan_ok else "🔴")
@@ -646,16 +644,6 @@ def _allocate_budget(watts: int, available_w) -> tuple:
     return False, f"necesitas {watts} W, tienes {round(remaining)} W", remaining
 
 
-def _nevera_status(nevera_mode: str) -> tuple:
-    """La nevera es la carga protegida (tomó el rol que tenía el frío): el
-    plan la da por buena siempre salvo el apagado programado a las 12 AM
-    (aguanta cerrada hasta el amanecer). El caso de emergencia de batería se
-    maneja aparte en build_load_advisor_message (ahí apaga todo)."""
-    if nevera_mode == "off_midnight":
-        return False, "aguanta cerrada hasta el amanecer"
-    return True, ""
-
-
 POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
 VENTILADOR_DEVICE_KEYS = [f"ventilador{i}" for i in range(1, MULTI_UNIT_DEVICES["ventilador"][0] + 1)]
 
@@ -666,16 +654,15 @@ def _laptop_deprioritized(now=None) -> bool:
     """True entre las 14:00 (2 PM) y las 7:00 AM (ventana que cruza
     medianoche): en ese horario la Laptop pasa a evaluarse ÚLTIMA en la cola
     de excedente (después de Ventilador, Power bank y Ecoplay) en vez de
-    justo después de la Nevera. Entre las 7:00 y las 14:00 mantiene su
-    posición normal (justo después de la Nevera). Es el mismo estilo de
-    chequeo hora del día que usa _current_load_block: minute_of_day contra
-    un rango, acá con wraparound porque el rango cruza la medianoche. Ojo:
-    esto solo cambia el ORDEN DE ASIGNACIÓN del excedente (quién se lleva el
-    presupuesto primero) — el texto de la Laptop se sigue mostrando siempre
-    en el mismo lugar del mensaje (Nevera, Laptop, Ventilador, Power bank,
-    Ecoplay) para no reordenar el mensaje dos veces por día; lo que cambia
-    es a quién le toca 🟢 primero cuando el excedente no alcanza para
-    todas."""
+    primero. Entre las 7:00 y las 14:00 mantiene su posición normal
+    (primera). Es el mismo estilo de chequeo hora del día que usa
+    _current_load_block: minute_of_day contra un rango, acá con wraparound
+    porque el rango cruza la medianoche. Ojo: esto solo cambia el ORDEN DE
+    ASIGNACIÓN del excedente (quién se lleva el presupuesto primero) — el
+    texto de la Laptop se sigue mostrando siempre en el mismo lugar del
+    mensaje (Laptop, Ventilador, Power bank, Ecoplay) para no reordenar el
+    mensaje dos veces por día; lo que cambia es a quién le toca 🟢 primero
+    cuando el excedente no alcanza para todas."""
     now = now or datetime.now(TZ)
     minute_of_day = now.hour * 60 + now.minute
     return not (7 * 60 <= minute_of_day < 14 * 60)
@@ -684,8 +671,8 @@ def _laptop_deprioritized(now=None) -> bool:
 def _compute_device_fits(m: dict = None, now=None) -> dict:
     """Único cálculo de fondo para el punto 🟢/🔴 y el déficit en W por
     dispositivo: corre la MISMA cadena de prioridad/orden que
-    build_load_advisor_message (Nevera > Laptop > Ventilador > Power bank >
-    Ecoplay, con el reordenamiento nocturno de _laptop_deprioritized), pero
+    build_load_advisor_message (Laptop > Ventilador > Power bank > Ecoplay,
+    con el reordenamiento nocturno de _laptop_deprioritized), pero
     devuelve un dict plano {device_key: {"fits": bool, "deficit_w": int}} en
     vez de armar texto. Se usa para pegar el punto y el déficit directo en
     cada fila de "Qué tienes encendido" (ver get_device_state_payload) sin
@@ -707,14 +694,11 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
     block = _current_load_block(now)
     if block is None:
         return fits
-    emergency = block["nevera"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
+    emergency = block["emergency_ok"] and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
     if emergency:
         for key in DEVICE_INFO:
-            ok = key == "nevera"
-            fits[key] = {"fits": ok, "deficit_w": 0 if ok else DEVICE_INFO[key]["watts"]}
+            fits[key] = {"fits": False, "deficit_w": DEVICE_INFO[key]["watts"]}
         return fits
-    nevera_ok, _nevera_detail = _nevera_status(block["nevera"])
-    fits["nevera"] = {"fits": nevera_ok, "deficit_w": 0}
     available = m["system_net_w"]
 
     def _laptop_fits(available_w):
@@ -753,19 +737,16 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
 
 
 def build_load_advisor_message(m: dict = None) -> str:
-    """Nevera, Laptop, Ventilador, Power bank y Ecoplay — cada una ya
-    evalúa el estado real (watts, batería) en vez de ser un texto fijo.
-    Prioridad: Nevera (protegida, no compite por excedente) > Laptop >
-    Ventilador > Power bank > Ecoplay — estas últimas cuatro se reparten
-    el MISMO excedente (system_net_w) en orden, restando lo que cada una se
-    lleva antes de evaluar la siguiente (salvo entre 14:00 y 7:00, ver
+    """Laptop, Ventilador, Power bank y Ecoplay — cada una ya evalúa el
+    estado real (watts, batería) en vez de ser un texto fijo. Prioridad:
+    Laptop > Ventilador > Power bank > Ecoplay — se reparten el MISMO
+    excedente (system_net_w) en orden, restando lo que cada una se lleva
+    antes de evaluar la siguiente (salvo entre 14:00 y 7:00, ver
     _laptop_deprioritized: ahí Laptop pasa a evaluarse último). Antes cada
     una miraba el excedente total por separado, lo que podía mostrar varias
     en verde a la vez aunque juntas no entraran. Por debajo de
     BATTERY_EMERGENCY_THRESHOLD se apaga TODO, Ecoplay incluida (sin
-    excepción de 'es internet, dejalo prendido') — no alcanza con bajar
-    solo la nevera si el resto sigue mostrando 'ON' como si nada, porque
-    son de menor prioridad y deben ceder primero/junto con ella."""
+    excepción de 'es internet, dejalo prendido')."""
     block = _current_load_block()
     if block is None:
         return ""
@@ -773,7 +754,7 @@ def build_load_advisor_message(m: dict = None) -> str:
     if m is None:
         m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    emergency = block["nevera"] != "off_midnight" and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
+    emergency = block["emergency_ok"] and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
 
     global _BATTERY_EMERGENCY_ACTIVE
     if emergency and not _BATTERY_EMERGENCY_ACTIVE:
@@ -789,7 +770,6 @@ def build_load_advisor_message(m: dict = None) -> str:
         lines = [
             f"🔆 *Horario:* {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo",
-            _status_line("🥶", "Nevera", False, ["nevera"]),
             _status_line("", "MacBook Pro", False, ["laptop"]),
             vent_line,
             pb_line,
@@ -798,8 +778,6 @@ def build_load_advisor_message(m: dict = None) -> str:
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
     else:
-        nevera_ok, nevera_detail = _nevera_status(block["nevera"])
-
         available = m["system_net_w"]
 
         def _allocate_laptop(available_w):
@@ -818,14 +796,14 @@ def build_load_advisor_message(m: dict = None) -> str:
             line = _status_line("📡", "Ecoplay", ok, ["ecoplay"], detail) + _ecoplay_cargas_suffix(now)
             return line, remaining
 
-        # Orden de asignación del excedente: normalmente Laptop va justo
-        # después de la Nevera. Entre las 14:00 y las 7:00 (_laptop_deprioritized)
-        # el usuario pidió que la Laptop pase a MÍNIMA prioridad — se evalúa
-        # último, después de Ventilador, Power bank y Ecoplay — porque de
-        # noche prefiere reservar el excedente para esas otras cargas antes
-        # que la laptop. El texto sigue apareciendo siempre en el mismo
-        # orden de lectura (Nevera, Laptop, Ventilador, Power bank, Ecoplay)
-        # — solo cambia a quién le toca 🟢 primero cuando escasea.
+        # Orden de asignación del excedente: normalmente Laptop va primero.
+        # Entre las 14:00 y las 7:00 (_laptop_deprioritized) el usuario pidió
+        # que la Laptop pase a MÍNIMA prioridad — se evalúa último, después
+        # de Ventilador, Power bank y Ecoplay — porque de noche prefiere
+        # reservar el excedente para esas otras cargas antes que la laptop.
+        # El texto sigue apareciendo siempre en el mismo orden de lectura
+        # (Laptop, Ventilador, Power bank, Ecoplay) — solo cambia a quién le
+        # toca 🟢 primero cuando escasea.
         if _laptop_deprioritized(now):
             vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
             pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
@@ -841,7 +819,6 @@ def build_load_advisor_message(m: dict = None) -> str:
 
         lines = [
             f"🔆 *Horario:* {block['label']}",
-            _status_line("🥶", "Nevera", nevera_ok, ["nevera"], nevera_detail),
             laptop_line,
             vent_line,
             pb_line,
@@ -884,7 +861,7 @@ def _weak_charge_note(pv_w, delta2_net_w, extra_net_w):
 # describe el plan), esto analiza el ritmo de descarga actual y proyecta si la
 # batería va a llegar por debajo de la meta del próximo checkpoint del plan
 # (15% al amanecer, 20% a las 9 AM, ~55-60% al mediodía, 65-75% a las 3 PM,
-# 100% al cierre del día — este último solo es realista con nevera+internet
+# 100% al cierre del día — este último solo es realista con internet
 # nomás). Los
 # checkpoints son cíclicos: si ya pasaron todos los de hoy,
 # se proyecta contra el primero de mañana (el amanecer), cruzando la
@@ -904,7 +881,7 @@ BATTERY_CHECKPOINTS = [
 # mismo horizonte que el período que se está mostrando, en vez de saltar
 # directo al mediodía y generar confusión (ej. "estamos en el período de
 # hasta las 9 pero dice que para el mediodía"). El
-# 100% del cierre solo es realista si te mantenés en nevera+internet nomás
+# 100% del cierre solo es realista si te mantenés en internet nomás
 # (laptop/ventilador/power bank se comen el excedente que hace falta
 # para juntar esa carga) — confirmado con el usuario, no es un objetivo
 # válido bajo uso mixto normal.
@@ -998,9 +975,9 @@ def get_device_state_payload() -> dict:
     # porque este endpoint lo pollean cada 2s, no puede forzar una consulta
     # activa al EcoFlow (ver /api/cargas).
     fits = _compute_device_fits(_gather_metrics(passive=True)) if ECOFLOW_READY else {}
-    # note: subtexto opcional bajo la fila del dispositivo en "Estado de
-    # carga" — hoy solo Ecoplay lo usa (autonomía de su batería propia, el
-    # dato que vivía en Gestión de cargas antes de sacarla).
+    # note: subtexto opcional bajo la fila de Ecoplay en "Qué tienes
+    # encendido" (autonomía de su batería propia, el dato que vivía en
+    # Gestión de cargas antes de sacarla).
     ecoplay_note = _ecoplay_autonomy_note()
     return {
         "devices": [
@@ -1309,6 +1286,9 @@ DASHBOARD_HTML = """<!doctype html>
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
   .device-btn.on .state { color: #4ade80; }
   .device-btn.off .state { color: #6b7684; }
+  .state-group { display: flex; align-items: center; gap: 10px; }
+  .state-group .state.state-on { color: #4ade80; }
+  .state-group .state.state-off { color: #6b7684; }
   .modal-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
     align-items: center; justify-content: center; padding: 16px; z-index: 100;
@@ -1576,10 +1556,10 @@ DASHBOARD_HTML = """<!doctype html>
   </div>
 
   <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
-       Solo alcanzable tocando el badge de Ecoplay en "Estado de carga"
-       cuando está "descargada" (ver renderCargaEstado) — el link
-       standalone "Editar % Ecoplay" que existía antes fue removido por
-       ser un trigger redundante. Reusa el estilo dark de .eta-box (mismo
+       Solo alcanzable tocando el badge "descargada" de Ecoplay en "Qué
+       tienes encendido" (ver renderDevices) — el link standalone "Editar %
+       Ecoplay" que existía antes fue removido por ser un trigger redundante.
+       Reusa el estilo dark de .eta-box (mismo
        bg #141b22, radios, colores de acento) en vez de
        inventar un lenguaje visual nuevo. DOM/JS vanilla, sin framework,
        igual que el resto del dashboard. -->
@@ -1593,11 +1573,6 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
       <div id="ecoplay-modal-result"></div>
     </div>
-  </div>
-
-  <div class="devices" id="carga-estado-wrap" style="display:none">
-    <div class="title">Estado de carga</div>
-    <div id="carga-estado"></div>
   </div>
 
   <div class="devices">
@@ -1820,7 +1795,6 @@ DASHBOARD_HTML = """<!doctype html>
         const res = await fetch('/api/devices');
         const d = await res.json();
         renderDevices(d.devices);
-        renderCargaEstado(d.devices);
       } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
     }
 
@@ -1837,8 +1811,11 @@ DASHBOARD_HTML = """<!doctype html>
       return dev.on && dev.fits === false && dev.deficit_w ? ` <span class="deficit">(-${dev.deficit_w}W)</span>` : '';
     }
     // Fuera de ecoplay ya no es clickeable ni marca ON/OFF (a pedido del
-    // usuario): solo queda el punto 🟢/🔴 de fitDot. Ecoplay es el único que
-    // conserva el toggle on/off real.
+    // usuario): solo queda el punto 🟢/🔴 de fitDot. Ecoplay es el único
+    // dispositivo con estado propio, así que junta acá ambos toggles (on/off
+    // real y cargada/descargada de su batería interna) en una sola fila en
+    // vez de vivir partido entre "Qué tienes encendido" y una sección
+    // "Estado de carga" aparte que antes solo terminaba mostrándolo a él.
     function renderDevices(devices) {
       document.getElementById('devices').innerHTML = devices.map(dev => {
         if (dev.key !== 'ecoplay') {
@@ -1850,74 +1827,56 @@ DASHBOARD_HTML = """<!doctype html>
         }
         return `
           <div class="device-btn ${dev.on ? 'on' : 'off'}" data-key="${dev.key}">
-            <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W${deficitText(dev)}</span>
-            <span class="state">${dev.on ? 'ON' : 'OFF'}</span>
+            <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W${deficitText(dev)}${dev.note ? ` <span class="sub">${dev.note}</span>` : ''}</span>
+            <span class="state-group">
+              <span class="state state-toggle ${dev.on ? 'state-on' : 'state-off'}" data-action="toggle">${dev.on ? 'ON' : 'OFF'}</span>
+              <span class="state state-charge ${dev.charged ? 'state-on' : 'state-off'}" data-action="charge">${dev.charged ? '🔋 cargada' : '🪫 descargada'}</span>
+            </span>
           </div>
         `;
       }).join('');
-      document.querySelectorAll('.device-btn').forEach(btn => {
-        if (btn.dataset.key !== 'ecoplay') return;
-        btn.addEventListener('click', async () => {
-          const key = btn.dataset.key;
-          const turningOn = !btn.classList.contains('on');
-          try {
-            const res = await fetch('/api/devices', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ device: key, on: turningOn }),
-            });
-            const d = await res.json();
-            if (d.devices) { renderDevices(d.devices); renderCargaEstado(d.devices); }
-          } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
-        });
+      const ecoplayBtn = document.querySelector('.device-btn[data-key="ecoplay"]');
+      if (!ecoplayBtn) return;
+      ecoplayBtn.querySelector('.state-toggle').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const turningOn = !e.currentTarget.classList.contains('state-on');
+        try {
+          const res = await fetch('/api/devices', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device: 'ecoplay', on: turningOn }),
+          });
+          const d = await res.json();
+          if (d.devices) renderDevices(d.devices);
+        } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
       });
-    }
-
-    // Tocable: cada badge togglea cargado/descargado (mismo patrón fetch que
-    // renderDevices/.device-btn de "Qué tienes encendido"), con un caso
-    // especial para ecoplay — ver handler de abajo.
-    // Fuera de ecoplay ya no se marca cargada/descargada (a pedido del
-    // usuario): el semáforo de fits en "Qué tienes encendido" es la única
-    // señal que queda para los demás dispositivos.
-    function renderCargaEstado(devices) {
-      const chargeable = devices.filter(dev => dev.charged != null && dev.key === 'ecoplay');
-      const wrap = document.getElementById('carga-estado-wrap');
-      wrap.style.display = chargeable.length ? '' : 'none';
-      document.getElementById('carga-estado').innerHTML = chargeable.map(dev => `
-        <div class="device-btn ${dev.charged ? 'on' : 'off'}" data-key="${dev.key}">
-          <div class="name">${dev.emoji} <div>${dev.label}${dev.note ? `<div class="sub">${dev.note}</div>` : ''}</div></div>
-          <span class="state">${dev.charged ? '🔋 cargada' : '🪫 descargada'}</span>
-        </div>
-      `).join('');
-      document.querySelectorAll('#carga-estado .device-btn').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const key = btn.dataset.key;
-          const settingCharged = !btn.classList.contains('on');
-          // Caso especial ecoplay: pasar a "cargada" abre el modal de % en
-          // vez de togglear directo (el % es la fuente de verdad real);
-          // pasar a "descargada" sí es un toggle directo (y el backend ya
-          // sincroniza ECOPLAY_LAST_PCT=0 como efecto secundario).
-          if (key === 'ecoplay' && settingCharged) {
-            openEcoplayModal();
-            return;
-          }
-          try {
-            const res = await fetch('/api/devices/charged', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ device: key, charged: settingCharged }),
-            });
-            const d = await res.json();
-            if (d.devices) { renderDevices(d.devices); renderCargaEstado(d.devices); }
-          } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
-        });
+      ecoplayBtn.querySelector('.state-charge').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const settingCharged = !e.currentTarget.classList.contains('state-on');
+        // Pasar a "cargada" abre el modal de % en vez de togglear directo
+        // (el % es la fuente de verdad real); pasar a "descargada" sí es un
+        // toggle directo (y el backend ya sincroniza ECOPLAY_LAST_PCT=0
+        // como efecto secundario).
+        if (settingCharged) {
+          openEcoplayModal();
+          return;
+        }
+        try {
+          const res = await fetch('/api/devices/charged', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ device: 'ecoplay', charged: settingCharged }),
+          });
+          const d = await res.json();
+          if (d.devices) renderDevices(d.devices);
+        } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
       });
     }
 
     // Modal para editar el % de Ecoplay sin pasar por Telegram (POST
     // /api/ecoplay). Simplificado: solo entra un % y toca "Aceptar". Único
-    // trigger: el badge de Ecoplay en "Estado de carga" (ver
-    // renderCargaEstado) — el link standalone que existía antes fue
+    // trigger: el badge "descargada" de Ecoplay en "Qué tienes encendido"
+    // (ver renderDevices) — el link standalone que existía antes fue
     // removido.
     function openEcoplayModal() {
       document.getElementById('ecoplay-modal-result').innerHTML = '';

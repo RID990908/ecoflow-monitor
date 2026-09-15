@@ -101,7 +101,7 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/on <dispositivo> — marcarlo encendido (nevera, laptop, ecoplay, ventilador, powerbank)\n"
+    "/on <dispositivo> — marcarlo encendido (laptop, ecoplay, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
     "/cargado <ventilador/powerbank/ecoplay> — marcar como cargada; en ventilador/powerbank "
     "además prioriza el resto en el próximo reparto de excedente (ej: /cargado ventilador1 ventilador2). "
@@ -120,7 +120,7 @@ HELP_TEXT = (
     "qué encender/apagar según el plan. Chequeo de carga AC cada "
     f"{AC_CHECK_MINUTES:g} min, también te aviso al llegar a 100% de carga.\n\n"
     "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
-    "(65-75% a las 3 PM, 100% al anochecer si te mantenés en nevera+internet), "
+    "(65-75% a las 3 PM, 100% al anochecer si te mantenés en internet nomás), "
     "te aviso antes de que pase."
 )
 START_TEXT = "👋 Hola, soy el monitor de tu EcoFlow.\n\n" + HELP_TEXT
@@ -171,8 +171,7 @@ def handle_command(text: str, chat_id: str) -> None:
         msg = dashboard_server.build_load_advisor_message()
         if not msg:
             msg = (
-                "🌙 Fuera de franja (6:00 AM–12:00 AM): internet ON, resto OFF, nevera "
-                "apagada desde las 12 AM hasta el amanecer."
+                "🌙 Fuera de franja (6:00 AM–12:00 AM): internet ON, resto OFF."
             )
         send_telegram(msg, chat_id=chat_id)
     elif cmd in ("/on", "/off"):
