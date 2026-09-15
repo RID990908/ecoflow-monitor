@@ -105,7 +105,7 @@ MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": 
 
 DEVICE_INFO = {
     "nevera": {"label": "Nevera", "emoji": "🥶", "watts": 100},
-    "laptop": {"label": "Laptop", "emoji": "💻", "watts": 160},
+    "laptop": {"label": "MacBook Pro", "emoji": "", "watts": 70},
     "ecoplay": {"label": "Ecoplay", "emoji": "📡", "watts": 120},
 }
 for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
