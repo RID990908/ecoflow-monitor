@@ -14,6 +14,7 @@ separadas en piezas más chicas.
 
 import http.server
 import json
+import math
 import os
 import time
 from datetime import datetime, timedelta
@@ -525,16 +526,14 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _status_line(emoji: str, label: str, plan_ok, device_keys: list, detail: str = "") -> str:
+def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detail: str = "") -> str:
     """Une los dos conceptos que antes se confundían bajo el mismo 'ON/OFF':
     el semáforo (🟢/🔴) es lo que dice el PLAN (¿se puede tener encendido
     ahora?), y el texto ON/OFF es lo que vos marcaste de verdad con
     /on-/off — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
     dice que había que apagarlo pero lo tenés marcado prendido). Para laptop
-    y ecoplay (una sola unidad cada una). plan_ok=None (solo posible
-    en ecoplay, ver DEVICE_CHARGED) significa "ya cargada, no compite por el
-    excedente" -> 🔋 en vez de 🟢/🔴."""
-    dot = "🔋" if plan_ok is None else ("🟢" if plan_ok else "🔴")
+    y ecoplay (una sola unidad cada una)."""
+    dot = "🟢" if plan_ok else "🔴"
     state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
     line = f"{emoji} {label}: {dot} {state_text}"
     if detail:
@@ -545,15 +544,14 @@ def _status_line(emoji: str, label: str, plan_ok, device_keys: list, detail: str
 def _multi_unit_fits(device_keys: list, available_w) -> tuple:
     """Núcleo de asignación para dispositivos multi-unidad (ventilador/power
     bank). Las unidades marcadas `cargada` (ver DEVICE_CHARGED) no compiten
-    por el excedente para nada: ya tienen su propia batería llena, así que
-    no hace falta prenderlas contra el sistema — quedan con fits=None (sin
-    punto 🟢/🔴, ver _multi_unit_line/_compute_device_fits) y no restan del
-    presupuesto. Solo las NO cargadas entran a la cola, en orden, y van
-    descontando su watiaje del excedente disponible. Devuelve (dict[key,
-    bool|None] de si esa unidad entra ahora mismo, dict[key, int] de cuánto
-    le falta si NO entra (0 si entra o si está cargada), excedente restante
-    para lo que venga después en la cadena de prioridad). Separado de
-    _multi_unit_line para que _compute_device_fits (el punto 🟢/🔴 y el
+    por el excedente para nada: ya tienen su propia batería llena, corren
+    solas y se pueden conectar sin condición — quedan con fits=True (🟢) y
+    no restan del presupuesto. Solo las NO cargadas entran a la cola, en
+    orden, y van descontando su watiaje del excedente disponible. Devuelve
+    (dict[key, bool] de si esa unidad entra ahora mismo, dict[key, int] de
+    cuánto le falta si NO entra (0 si entra o si está cargada), excedente
+    restante para lo que venga después en la cadena de prioridad). Separado
+    de _multi_unit_line para que _compute_device_fits (el punto 🟢/🔴 y el
     déficit en W que se pegan a cada fila de "Qué tienes encendido") pueda
     reusar exactamente esta misma asignación sin duplicar el orden/sorteo —
     si esto cambia, tanto el mensaje del bot como el punto por fila quedan
@@ -563,7 +561,7 @@ def _multi_unit_fits(device_keys: list, available_w) -> tuple:
     deficit_by_key = {}
     for key in device_keys:
         if DEVICE_CHARGED.get(key, False):
-            fit_by_key[key] = None
+            fit_by_key[key] = True
             deficit_by_key[key] = 0
             continue
         watts = DEVICE_INFO[key]["watts"]
@@ -596,13 +594,9 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
     sistema, es lo que queda para ESTA carga en particular."""
     original_available = max(0, available_w) if available_w is not None else 0
     fit_by_key, _deficit_by_key, remaining = _multi_unit_fits(device_keys, original_available)
-    # Cargada -> 🔋 (ya tiene su propia batería llena, no compite por el
-    # excedente ni hace falta encenderla contra el sistema). Sin cargar ->
-    # 🟢/🔴 según si entra en el excedente actual (ver _multi_unit_fits).
-    dot_by_key = {
-        k: ("🔋" if fit_by_key[k] is None else ("🟢" if fit_by_key[k] else "🔴"))
-        for k in device_keys
-    }
+    # 🟢/🔴 según si entra en el excedente actual (ver _multi_unit_fits) —
+    # cargada siempre da fit=True, corre de su propia batería.
+    dot_by_key = {k: ("🟢" if fit_by_key[k] else "🔴") for k in device_keys}
     dots = [dot_by_key[key] for key in device_keys]  # render in original order
     on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
     if on_count == len(device_keys):
@@ -618,13 +612,13 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
     # cargada y prendida corre de su propia batería, no le pide nada al
     # sistema aunque el usuario la tenga marcada ON.
     actionable = any(
-        DEVICE_STATE.get(key) and fit_by_key[key] is False for key in device_keys
+        DEVICE_STATE.get(key) and not fit_by_key[key] for key in device_keys
     )
     if actionable:
         needed = sum(
             DEVICE_INFO[key]["watts"]
             for key in device_keys
-            if DEVICE_STATE.get(key) and fit_by_key[key] is not None
+            if DEVICE_STATE.get(key) and not DEVICE_CHARGED.get(key, False)
         )
         line += f" — necesitas {needed} W, tienes {round(original_available)} W"
     return line, remaining
@@ -691,6 +685,11 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
     if m is None:
         m = _gather_metrics(passive=True)
     fits = {key: {"fits": True, "deficit_w": 0} for key in DEVICE_INFO}
+    # Con corriente de la calle no hay excedente que repartir: todo corre de
+    # la red, no de la batería, así que se puede conectar sin condición (ver
+    # misma lógica en build_load_advisor_message).
+    if m.get("has_ac"):
+        return fits
     block = _current_load_block(now)
     if block is None:
         return fits
@@ -709,7 +708,7 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
 
     def _ecoplay_fits(available_w):
         if DEVICE_CHARGED.get("ecoplay", False):
-            return {"fits": None, "deficit_w": 0}, available_w
+            return {"fits": True, "deficit_w": 0}, available_w
         watts = DEVICE_INFO["ecoplay"]["watts"]
         ok, _detail, remaining = _allocate_budget(watts, available_w)
         info = {"fits": ok, "deficit_w": 0 if ok else round(watts - remaining)}
@@ -746,7 +745,10 @@ def build_load_advisor_message(m: dict = None) -> str:
     una miraba el excedente total por separado, lo que podía mostrar varias
     en verde a la vez aunque juntas no entraran. Por debajo de
     BATTERY_EMERGENCY_THRESHOLD se apaga TODO, Ecoplay incluida (sin
-    excepción de 'es internet, dejalo prendido')."""
+    excepción de 'es internet, dejalo prendido') — salvo que haya corriente
+    de la calle: ahí no hay excedente que cuidar (todo corre de la red, no
+    de la batería), así que ninguna carga compite por presupuesto y no hay
+    emergencia posible."""
     block = _current_load_block()
     if block is None:
         return ""
@@ -754,7 +756,12 @@ def build_load_advisor_message(m: dict = None) -> str:
     if m is None:
         m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    emergency = block["emergency_ok"] and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
+    emergency = (
+        not m["has_ac"]
+        and block["emergency_ok"]
+        and m["avg_soc"] is not None
+        and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
+    )
 
     global _BATTERY_EMERGENCY_ACTIVE
     if emergency and not _BATTERY_EMERGENCY_ACTIVE:
@@ -778,7 +785,9 @@ def build_load_advisor_message(m: dict = None) -> str:
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
     else:
-        available = m["system_net_w"]
+        # Con corriente de la calle, excedente "infinito": nada compite por
+        # presupuesto, todo entra (ver misma lógica en _compute_device_fits).
+        available = math.inf if m["has_ac"] else m["system_net_w"]
 
         def _allocate_laptop(available_w):
             ok, detail, remaining = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available_w)
@@ -788,7 +797,7 @@ def build_load_advisor_message(m: dict = None) -> str:
 
         def _allocate_ecoplay(available_w):
             if DEVICE_CHARGED.get("ecoplay", False):
-                line = _status_line("📡", "Ecoplay", None, ["ecoplay"]) + _ecoplay_cargas_suffix(now)
+                line = _status_line("📡", "Ecoplay", True, ["ecoplay"]) + _ecoplay_cargas_suffix(now)
                 return line, available_w
             ok, detail, remaining = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available_w)
             if ok or not DEVICE_STATE.get("ecoplay"):
