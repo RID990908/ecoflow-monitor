@@ -790,7 +790,7 @@ def build_load_advisor_message(m: dict = None) -> str:
             f"🔆 *Horario:* {block['label']}",
             f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo",
             _status_line("🥶", "Nevera", False, ["nevera"]),
-            _status_line("💻", "Laptop", False, ["laptop"]),
+            _status_line("", "MacBook Pro", False, ["laptop"]),
             vent_line,
             pb_line,
             _status_line("📡", "Ecoplay", False, ["ecoplay"]) + _ecoplay_cargas_suffix(now),
@@ -831,10 +831,10 @@ def build_load_advisor_message(m: dict = None) -> str:
             pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
             ecoplay_line, available = _allocate_ecoplay(available)
             laptop_ok, laptop_detail, available = _allocate_laptop(available)
-            laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
+            laptop_line = _status_line("", "MacBook Pro", laptop_ok, ["laptop"], laptop_detail)
         else:
             laptop_ok, laptop_detail, available = _allocate_laptop(available)
-            laptop_line = _status_line("💻", "Laptop", laptop_ok, ["laptop"], laptop_detail)
+            laptop_line = _status_line("", "MacBook Pro", laptop_ok, ["laptop"], laptop_detail)
             vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
             pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
             ecoplay_line, available = _allocate_ecoplay(available)
@@ -1836,14 +1836,27 @@ DASHBOARD_HTML = """<!doctype html>
     function deficitText(dev) {
       return dev.on && dev.fits === false && dev.deficit_w ? ` <span class="deficit">(-${dev.deficit_w}W)</span>` : '';
     }
+    // Fuera de ecoplay ya no es clickeable ni marca ON/OFF (a pedido del
+    // usuario): solo queda el punto 🟢/🔴 de fitDot. Ecoplay es el único que
+    // conserva el toggle on/off real.
     function renderDevices(devices) {
-      document.getElementById('devices').innerHTML = devices.map(dev => `
-        <div class="device-btn ${dev.on ? 'on' : 'off'}" data-key="${dev.key}">
-          <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W${deficitText(dev)}</span>
-          <span class="state">${dev.on ? 'ON' : 'OFF'}</span>
-        </div>
-      `).join('');
+      document.getElementById('devices').innerHTML = devices.map(dev => {
+        if (dev.key !== 'ecoplay') {
+          return `
+            <div class="device-btn off" data-key="${dev.key}">
+              <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W</span>
+            </div>
+          `;
+        }
+        return `
+          <div class="device-btn ${dev.on ? 'on' : 'off'}" data-key="${dev.key}">
+            <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W${deficitText(dev)}</span>
+            <span class="state">${dev.on ? 'ON' : 'OFF'}</span>
+          </div>
+        `;
+      }).join('');
       document.querySelectorAll('.device-btn').forEach(btn => {
+        if (btn.dataset.key !== 'ecoplay') return;
         btn.addEventListener('click', async () => {
           const key = btn.dataset.key;
           const turningOn = !btn.classList.contains('on');
@@ -1863,8 +1876,11 @@ DASHBOARD_HTML = """<!doctype html>
     // Tocable: cada badge togglea cargado/descargado (mismo patrón fetch que
     // renderDevices/.device-btn de "Qué tienes encendido"), con un caso
     // especial para ecoplay — ver handler de abajo.
+    // Fuera de ecoplay ya no se marca cargada/descargada (a pedido del
+    // usuario): el semáforo de fits en "Qué tienes encendido" es la única
+    // señal que queda para los demás dispositivos.
     function renderCargaEstado(devices) {
-      const chargeable = devices.filter(dev => dev.charged != null);
+      const chargeable = devices.filter(dev => dev.charged != null && dev.key === 'ecoplay');
       const wrap = document.getElementById('carga-estado-wrap');
       wrap.style.display = chargeable.length ? '' : 'none';
       document.getElementById('carga-estado').innerHTML = chargeable.map(dev => `
