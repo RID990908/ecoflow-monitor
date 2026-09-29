@@ -1119,10 +1119,17 @@ def get_dashboard_status() -> dict:
         "threshold_pct": shared_state.BATTERY_LOW_THRESHOLD,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         # Versión corta ("hace 3h 20m") para mostrar pegada al nodo AC del
-        # diagrama en vez de la frase completa — mismo cómputo que
-        # _last_ac_line, sin el prefijo "Última vez que llegó corriente:".
+        # diagrama. Con AC presente, cuánto hace que llegó (LAST_AC_TIMESTAMP);
+        # con AC ausente, cuánto hace que se fue (OUTAGE_START_TIMESTAMP) —
+        # antes esto mostraba siempre LAST_AC_TIMESTAMP, así que en medio de
+        # un corte reciente seguía mostrando la duración de la conexión
+        # anterior (ej. "hace 1d") en vez de hace cuánto se fue la luz.
         "last_ac_short": (
-            f"hace {_format_elapsed(time.time() - shared_state.LAST_AC_TIMESTAMP)}" if shared_state.LAST_AC_TIMESTAMP else None
+            f"hace {_format_elapsed(time.time() - shared_state.LAST_AC_TIMESTAMP)}"
+            if m["has_ac"] and shared_state.LAST_AC_TIMESTAMP
+            else f"se fue hace {_format_elapsed(time.time() - shared_state.OUTAGE_START_TIMESTAMP)}"
+            if not m["has_ac"] and shared_state.OUTAGE_START_TIMESTAMP
+            else None
         ),
         "ports": m["ports"],
         "ac_out_w": m["ac_out_w"] or 0,
