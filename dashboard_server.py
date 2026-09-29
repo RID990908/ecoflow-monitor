@@ -1127,7 +1127,7 @@ def get_dashboard_status() -> dict:
         "last_ac_short": (
             f"hace {_format_elapsed(time.time() - shared_state.LAST_AC_TIMESTAMP)}"
             if m["has_ac"] and shared_state.LAST_AC_TIMESTAMP
-            else f"se fue hace {_format_elapsed(time.time() - shared_state.OUTAGE_START_TIMESTAMP)}"
+            else f"hace {_format_elapsed(time.time() - shared_state.OUTAGE_START_TIMESTAMP)}"
             if not m["has_ac"] and shared_state.OUTAGE_START_TIMESTAMP
             else None
         ),
