@@ -304,6 +304,14 @@ def _gather_metrics(passive: bool = False) -> dict:
         _pick(data, "pd.wattsOutSum", default=0),
         (ac_out_w_raw or 0) + usb_out_w_raw + car_out_w_raw,
     )
+    # Piso de ruido: por debajo de shared_state.AC_WATTS_THRESHOLD el sensor
+    # reporta jitter de unos pocos watts sin que haya carga real conectada —
+    # sin este clamp esos watts fantasma se mostraban como consumo/descarga
+    # real. Se aplica acá y de nuevo sobre delta2_net_w/system_net_w más abajo
+    # (cada uno puede quedar por debajo del piso aun si los crudos que lo
+    # componen no lo están).
+    if abs(out_w) < shared_state.AC_WATTS_THRESHOLD:
+        out_w = 0
     total_in_w = _pick(data, "pd.wattsInSum", default=(pv_w or 0))
     remain_min = _pick(data, "pd.remainTime", "bms_emsStatus.dsgRemainTime")
 
@@ -314,8 +322,12 @@ def _gather_metrics(passive: bool = False) -> dict:
     # contra logs de producción (carga: inputWatts>0/outputWatts=0; descarga:
     # inputWatts=0/outputWatts>0, nunca los dos activos a la vez).
     delta2_net_w = total_in_w - out_w
+    if abs(delta2_net_w) < shared_state.AC_WATTS_THRESHOLD:
+        delta2_net_w = 0
     extra_net_w = (extra_in_w or 0) - (extra_out_w or 0) if extra_in_w is not None else None
     system_net_w = delta2_net_w + (extra_net_w or 0)
+    if abs(system_net_w) < shared_state.AC_WATTS_THRESHOLD:
+        system_net_w = 0
     extra_in_w_nf = _nf(extra_in_w)
     # extra_out_w: descarga bruta de la batería extra (bms_slave.outputWatts),
     # separada de extra_in_w (carga) — alimenta el nodo "Extra" de arriba, que

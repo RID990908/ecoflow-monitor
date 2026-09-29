@@ -167,13 +167,20 @@ def ac_check_timer() -> None:
             # sigue enchufado en paso-directo (0W netos pero AC presente).
             is_charging = dashboard_server.get_ac_present(data)
             if is_charging and not shared_state.WAS_CHARGING_AC:
-                if ac_w > shared_state.AC_WATTS_THRESHOLD:
-                    telegram_bot.send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W).")
+                if shared_state.OUTAGE_START_TIMESTAMP:
+                    outage_start_str = datetime.fromtimestamp(shared_state.OUTAGE_START_TIMESTAMP, TZ).strftime("%H:%M")
+                    outage_note = f" (se había ido a las {outage_start_str})"
                 else:
-                    telegram_bot.send_telegram("⚡ Llegó la corriente (la batería ya está llena, no está cargando neto).")
+                    outage_note = ""
+                if ac_w > shared_state.AC_WATTS_THRESHOLD:
+                    telegram_bot.send_telegram(f"⚡ Llegó la corriente: la Delta 2 empezó a cargar por AC ({ac_w} W){outage_note}.")
+                else:
+                    telegram_bot.send_telegram(f"⚡ Llegó la corriente (la batería ya está llena, no está cargando neto){outage_note}.")
                 log.info("Notificado inicio de AC (%s W)", ac_w)
                 shared_state.LAST_AC_TIMESTAMP = time.time()
+                shared_state.OUTAGE_START_TIMESTAMP = None
             elif not is_charging and shared_state.WAS_CHARGING_AC:
+                shared_state.OUTAGE_START_TIMESTAMP = time.time()
                 telegram_bot.send_telegram("🔌⚠️ Se fue la luz: la Delta 2 dejó de tener AC conectado.")
                 log.info("Notificado corte de luz (AC desconectado)")
 
