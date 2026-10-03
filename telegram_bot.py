@@ -59,7 +59,6 @@ def set_bot_commands() -> None:
         {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
         {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off laptop)"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
-        {"command": "ecoplay", "description": "Hasta qué hora aguanta la batería propia de la Ecoplay (ej: /ecoplay 86)"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
     resp = requests.post(
@@ -101,16 +100,12 @@ HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
     "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
     "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/on <dispositivo> — marcarlo encendido (laptop, ecoplay, ventilador, powerbank)\n"
+    "/on <dispositivo> — marcarlo encendido (laptop, ventilador, powerbank)\n"
     "/off <dispositivo> — marcarlo apagado\n"
-    "/cargado <ventilador/powerbank/ecoplay> — marcar como cargada; en ventilador/powerbank "
-    "además prioriza el resto en el próximo reparto de excedente (ej: /cargado ventilador1 ventilador2). "
-    "En ecoplay es solo informativo (no afecta prioridades) — para el dato preciso seguí usando /ecoplay <pct>\n"
-    "/descargado <ventilador/powerbank/ecoplay> — marcarla como descargada (en ventilador/powerbank, "
-    "prioridad para recibir carga)\n"
+    "/cargado <ventilador/powerbank> — marcar como cargada; además prioriza el resto en el "
+    "próximo reparto de excedente (ej: /cargado ventilador1 ventilador2)\n"
+    "/descargado <ventilador/powerbank> — marcarla como descargada (prioridad para recibir carga)\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
-    "/ecoplay <porcentaje> — hasta qué hora aguanta la batería propia de la Ecoplay/WiFi "
-    "(35-45 W) para llegar a las 7:30 AM (ej: /ecoplay 86)\n"
     "/fuiyo — si apagaste vos la Delta 2 y te llegó el aviso de \"no recibo datos\", "
     "mandá esto para que no te siga avisando hasta que vuelva\n"
     "/start — qué hace este bot\n"
@@ -207,12 +202,6 @@ def handle_command(text: str, chat_id: str) -> None:
                     # encendido" no siga mostrándola prendida.
                     if cmd == "/cargado":
                         shared_state.DEVICE_STATE[k] = False
-                # Ecoplay es la única con sistema de % propio (/ecoplay <pct>);
-                # al marcarla descargada por acá, sincronizamos ese % a 0 para
-                # que /cargas y _ecoplay_cargas_suffix reflejen lo mismo que
-                # el flag binario. Ventilador/powerbank no tienen % análogo.
-                if cmd == "/descargado" and "ecoplay" in resolved:
-                    shared_state.ECOPLAY_LAST_PCT = 0
                 shared_state._save_persisted_state()
                 lines.extend(f"{em} {DEVICE_INFO[k]['label']}: {estado}" for k in resolved)
             if invalid:
@@ -220,14 +209,6 @@ def handle_command(text: str, chat_id: str) -> None:
                     f"No reconozco / no es multi-unidad: {', '.join(invalid)}. Solo: {', '.join(DEVICE_CHARGED)}"
                 )
             send_telegram("\n".join(lines), chat_id=chat_id)
-    elif cmd == "/ecoplay":
-        if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
-            send_telegram("Uso: /ecoplay <porcentaje entre 0 y 100>, ej: /ecoplay 86", chat_id=chat_id)
-        else:
-            shared_state.ECOPLAY_LAST_PCT = int(parts[1])
-            shared_state._save_persisted_state()
-            info = dashboard_server._ecoplay_autonomy(shared_state.ECOPLAY_LAST_PCT)
-            send_telegram(dashboard_server._format_ecoplay_message(info), chat_id=chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)

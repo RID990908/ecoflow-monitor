@@ -156,91 +156,6 @@ def _time_to_threshold_line(soc, net_w, num_batteries, threshold) -> str:
     return f"🪫 ~{h}h {m}m para llegar al {threshold}% (a las {eta.strftime('%H:%M')})"
 
 
-# Batería propia de la Ecoplay/WiFi (power bank aparte, no reporta telemetría
-# como la Delta 2 — el usuario informa el % a mano con /ecoplay). Capacidad
-# confirmada por el usuario: ~484 Wh. El consumo real medido es 35-45 W;
-# se usa el techo (45 W, peor caso) para el cálculo de la hora segura, ya
-# que es el que menos autonomía da y por lo tanto el que garantiza llegar
-# a la meta incluso si el consumo real termina siendo el más alto.
-ECOPLAY_BATTERY_WH = 484
-ECOPLAY_MAX_W = 45
-ECOPLAY_TARGET_HOUR = 7
-ECOPLAY_TARGET_MINUTE = 30
-
-
-def _next_ecoplay_target(now) -> datetime:
-    target = now.replace(hour=ECOPLAY_TARGET_HOUR, minute=ECOPLAY_TARGET_MINUTE, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-    return target
-
-
-def _ecoplay_autonomy(pct: int, now=None) -> dict:
-    """Dado el % que el usuario reporta a mano de la batería propia de la
-    Ecoplay, calcula a qué hora, como mucho, conviene pasarla a esa batería
-    para que llegue sin cortarse hasta el próximo objetivo (7:30 AM). Usa
-    siempre el peor caso de consumo (45 W): da menos horas de autonomía que
-    el resto del rango, así que arrancar recién ahí es lo que garantiza
-    llegar a la meta incluso si el consumo real termina siendo el más alto."""
-    now = now or datetime.now(TZ)
-    wh_available = ECOPLAY_BATTERY_WH * pct / 100
-    worst_hours = wh_available / ECOPLAY_MAX_W
-    target = _next_ecoplay_target(now)
-    safe_switch = target - timedelta(hours=worst_hours)
-    # BUG (fixed): target siempre está en el futuro respecto de now (rueda
-    # al próximo 07:30 por definición de _next_ecoplay_target), así que
-    # comparar safe_switch > now es casi siempre True sin importar pct —
-    # con worst_hours=0 (pct=0), safe_switch == target, que sigue siendo
-    # > now. Eso hacía que has_autonomy diera True incluso con 0% de
-    # batería. La autonomía real depende de worst_hours (cuántas horas
-    # aguanta la batería propia al peor consumo), no de una comparación de
-    # timestamps contra target. Epsilon de 0.05h (~3min) evita falsos
-    # positivos por redondeo de punto flotante cuando pct es efectivamente 0.
-    has_autonomy = worst_hours > 0.05
-    return {
-        "pct": pct,
-        "wh_available": round(wh_available),
-        "target_text": target.strftime("%H:%M"),
-        "safe_switch_text": safe_switch.strftime("%H:%M"),
-        "has_autonomy": has_autonomy,
-    }
-
-
-def _format_ecoplay_message(info: dict) -> str:
-    if not info["has_autonomy"]:
-        return (
-            f"📡 Ecoplay al {info['pct']}%: no tiene autonomía como para pasarla a su batería propia "
-            f"ahora mismo y aguantar hasta las {info['target_text']} — no la cambies todavía."
-        )
-    return (
-        f"📡 Ecoplay al {info['pct']}%: podés poner la wifi en su batería propia a partir de "
-        f"las ~{info['safe_switch_text']} para que aguante hasta las {info['target_text']}."
-    )
-
-
-def _ecoplay_autonomy_note(now=None) -> str | None:
-    """Mismo dato que /ecoplay (% propio + hora segura de cambio o "sin
-    autonomía todavía"), sin el ' · ' de prefijo que usa _ecoplay_cargas_suffix
-    para pegarlo a una línea de texto — este devuelve None si el usuario
-    todavía no informó ningún %, para que el caller decida si mostrar algo.
-    Se usa como subtexto bajo la fila de Ecoplay en "Estado de carga" (ver
-    get_device_state_payload), ahora que Gestión de cargas no existe más."""
-    if shared_state.ECOPLAY_LAST_PCT is None:
-        return None
-    info = _ecoplay_autonomy(shared_state.ECOPLAY_LAST_PCT, now)
-    if not info["has_autonomy"]:
-        return f"🔋 {info['pct']}%: sin autonomía todavía"
-    return f"🔋 {info['pct']}%: {info['safe_switch_text']} (Meta: {info['target_text']})"
-
-
-def _ecoplay_cargas_suffix(now=None) -> str:
-    """Nota corta para pegar a la línea de Ecoplay en el mensaje de Telegram
-    (build_load_advisor_message) — mismo dato que _ecoplay_autonomy_note,
-    con el ' · ' de prefijo para concatenar."""
-    note = _ecoplay_autonomy_note(now)
-    return f" · {note}" if note else ""
-
-
 def _format_elapsed(seconds: float) -> str:
     seconds = max(0, int(seconds))
     hours, rem = divmod(seconds, 3600)
@@ -492,7 +407,7 @@ def build_report(m: dict = None) -> str:
 # 19:30, que dice qué debería estar encendido/apagado según el excedente real
 # del sistema (que cubre las 24 h: la noche solo se consulta por /cargas, el
 # timer automático no manda mensajes fuera de esa ventana). Laptop,
-# Ventilador, Power bank y Ecoplay se reparten el excedente real en orden de
+# Ventilador y Power bank se reparten el excedente real en orden de
 # prioridad (ver build_load_advisor_message) — ninguna tiene ventana horaria
 # fija, todas se evalúan contra system_net_w en el momento de la consulta.
 BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > resto
@@ -505,7 +420,7 @@ BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet
 # momento de la consulta, sin importar la hora que sea. La ÚNICA excepción es
 # el ORDEN de prioridad de Laptop dentro de esa cola (ver
 # _laptop_deprioritized y build_load_advisor_message): de 2 PM a 7 AM pasa a
-# evaluarse último (después de Ventilador, Power bank y Ecoplay) en vez de
+# evaluarse último (después de Ventilador y Power bank) en vez de
 # primero — es de horario, no de encendido/apagado.
 _LOAD_SCHEDULE = [
     {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM", "emergency_ok": True,
@@ -544,7 +459,7 @@ def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detai
     ahora?), y el texto ON/OFF es lo que vos marcaste de verdad con
     /on-/off — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
     dice que había que apagarlo pero lo tenés marcado prendido). Para laptop
-    y ecoplay (una sola unidad cada una)."""
+    (una sola unidad)."""
     dot = "🟢" if plan_ok else "🔴"
     state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
     line = f"{emoji} {label}: {dot} {state_text}"
@@ -596,7 +511,7 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
     TODAS las unidades están marcadas, se resume con un solo ✅ al final en
     vez de repetir el ✓ en cada una.
 
-    El detalle de watts (mismo estilo que laptop/ecoplay: "necesitas X W,
+    El detalle de watts (mismo estilo que laptop: "necesitas X W,
     tienes Y W") solo se muestra si hace falta actuar: alguna unidad
     marcada ON de verdad está en rojo. X es la suma de TODAS las unidades
     marcadas (lo que pediste en total), no solo las que no entraron.
@@ -639,7 +554,7 @@ def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> 
 def _allocate_budget(watts: int, available_w) -> tuple:
     """Descuenta `watts` del excedente disponible si entra, y devuelve
     (ok, detail, excedente_restante) — la pieza que permite que Laptop,
-    Ecoplay, Power bank y Ventilador se repartan el MISMO excedente en vez de que
+    Power bank y Ventilador se repartan el MISMO excedente en vez de que
     cada uno lo evalúe por separado contra el total (eso hacía que
     aparecieran varias en verde a la vez aunque juntas no entraran)."""
     if available_w is None:
@@ -659,14 +574,14 @@ _BATTERY_EMERGENCY_ACTIVE = False  # trackea la transición para loguear una sol
 def _laptop_deprioritized(now=None) -> bool:
     """True entre las 14:00 (2 PM) y las 7:00 AM (ventana que cruza
     medianoche): en ese horario la Laptop pasa a evaluarse ÚLTIMA en la cola
-    de excedente (después de Ventilador, Power bank y Ecoplay) en vez de
+    de excedente (después de Ventilador y Power bank) en vez de
     primero. Entre las 7:00 y las 14:00 mantiene su posición normal
     (primera). Es el mismo estilo de chequeo hora del día que usa
     _current_load_block: minute_of_day contra un rango, acá con wraparound
     porque el rango cruza la medianoche. Ojo: esto solo cambia el ORDEN DE
     ASIGNACIÓN del excedente (quién se lleva el presupuesto primero) — el
     texto de la Laptop se sigue mostrando siempre en el mismo lugar del
-    mensaje (Laptop, Ventilador, Power bank, Ecoplay) para no reordenar el
+    mensaje (Laptop, Ventilador, Power bank) para no reordenar el
     mensaje dos veces por día; lo que cambia es a quién le toca 🟢 primero
     cuando el excedente no alcanza para todas."""
     now = now or datetime.now(TZ)
@@ -677,7 +592,7 @@ def _laptop_deprioritized(now=None) -> bool:
 def _compute_device_fits(m: dict = None, now=None) -> dict:
     """Único cálculo de fondo para el punto 🟢/🔴 y el déficit en W por
     dispositivo: corre la MISMA cadena de prioridad/orden que
-    build_load_advisor_message (Laptop > Ventilador > Power bank > Ecoplay,
+    build_load_advisor_message (Laptop > Ventilador > Power bank,
     con el reordenamiento nocturno de _laptop_deprioritized), pero
     devuelve un dict plano {device_key: {"fits": bool, "deficit_w": int}} en
     vez de armar texto. Se usa para pegar el punto y el déficit directo en
@@ -718,14 +633,6 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
         info = {"fits": ok, "deficit_w": 0 if ok else round(watts - remaining)}
         return info, remaining
 
-    def _ecoplay_fits(available_w):
-        if DEVICE_CHARGED.get("ecoplay", False):
-            return {"fits": True, "deficit_w": 0}, available_w
-        watts = DEVICE_INFO["ecoplay"]["watts"]
-        ok, _detail, remaining = _allocate_budget(watts, available_w)
-        info = {"fits": ok, "deficit_w": 0 if ok else round(watts - remaining)}
-        return info, remaining
-
     def _multi_unit_fit_info(device_keys, available_w):
         fit_by_key, deficit_by_key, remaining = _multi_unit_fits(device_keys, available_w)
         return {k: {"fits": fit_by_key[k], "deficit_w": deficit_by_key[k]} for k in device_keys}, remaining
@@ -735,7 +642,6 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
         pb_fits, available = _multi_unit_fit_info(POWERBANK_DEVICE_KEYS, available)
         fits.update(vent_fits)
         fits.update(pb_fits)
-        fits["ecoplay"], available = _ecoplay_fits(available)
         fits["laptop"], available = _laptop_fits(available)
     else:
         fits["laptop"], available = _laptop_fits(available)
@@ -743,20 +649,19 @@ def _compute_device_fits(m: dict = None, now=None) -> dict:
         pb_fits, available = _multi_unit_fit_info(POWERBANK_DEVICE_KEYS, available)
         fits.update(vent_fits)
         fits.update(pb_fits)
-        fits["ecoplay"], available = _ecoplay_fits(available)
     return fits
 
 
 def build_load_advisor_message(m: dict = None) -> str:
-    """Laptop, Ventilador, Power bank y Ecoplay — cada una ya evalúa el
+    """Laptop, Ventilador y Power bank — cada una ya evalúa el
     estado real (watts, batería) en vez de ser un texto fijo. Prioridad:
-    Laptop > Ventilador > Power bank > Ecoplay — se reparten el MISMO
+    Laptop > Ventilador > Power bank — se reparten el MISMO
     excedente (system_net_w) en orden, restando lo que cada una se lleva
     antes de evaluar la siguiente (salvo entre 14:00 y 7:00, ver
     _laptop_deprioritized: ahí Laptop pasa a evaluarse último). Antes cada
     una miraba el excedente total por separado, lo que podía mostrar varias
     en verde a la vez aunque juntas no entraran. Por debajo de
-    BATTERY_EMERGENCY_THRESHOLD se apaga TODO, Ecoplay incluida (sin
+    BATTERY_EMERGENCY_THRESHOLD se apaga TODO (sin
     excepción de 'es internet, dejalo prendido') — salvo que haya corriente
     de la calle: ahí no hay excedente que cuidar (todo corre de la red, no
     de la batería), así que ninguna carga compite por presupuesto y no hay
@@ -792,7 +697,6 @@ def build_load_advisor_message(m: dict = None) -> str:
             _status_line("", "MacBook Pro", False, ["laptop"]),
             vent_line,
             pb_line,
-            _status_line("📡", "Ecoplay", False, ["ecoplay"]) + _ecoplay_cargas_suffix(now),
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
@@ -807,28 +711,17 @@ def build_load_advisor_message(m: dict = None) -> str:
                 detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
             return ok, detail, remaining
 
-        def _allocate_ecoplay(available_w):
-            if DEVICE_CHARGED.get("ecoplay", False):
-                line = _status_line("📡", "Ecoplay", True, ["ecoplay"]) + _ecoplay_cargas_suffix(now)
-                return line, available_w
-            ok, detail, remaining = _allocate_budget(DEVICE_INFO["ecoplay"]["watts"], available_w)
-            if ok or not DEVICE_STATE.get("ecoplay"):
-                detail = ""
-            line = _status_line("📡", "Ecoplay", ok, ["ecoplay"], detail) + _ecoplay_cargas_suffix(now)
-            return line, remaining
-
         # Orden de asignación del excedente: normalmente Laptop va primero.
         # Entre las 14:00 y las 7:00 (_laptop_deprioritized) el usuario pidió
         # que la Laptop pase a MÍNIMA prioridad — se evalúa último, después
-        # de Ventilador, Power bank y Ecoplay — porque de noche prefiere
+        # de Ventilador y Power bank — porque de noche prefiere
         # reservar el excedente para esas otras cargas antes que la laptop.
         # El texto sigue apareciendo siempre en el mismo orden de lectura
-        # (Laptop, Ventilador, Power bank, Ecoplay) — solo cambia a quién le
+        # (Laptop, Ventilador, Power bank) — solo cambia a quién le
         # toca 🟢 primero cuando escasea.
         if _laptop_deprioritized(now):
             vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
             pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
-            ecoplay_line, available = _allocate_ecoplay(available)
             laptop_ok, laptop_detail, available = _allocate_laptop(available)
             laptop_line = _status_line("", "MacBook Pro", laptop_ok, ["laptop"], laptop_detail)
         else:
@@ -836,14 +729,12 @@ def build_load_advisor_message(m: dict = None) -> str:
             laptop_line = _status_line("", "MacBook Pro", laptop_ok, ["laptop"], laptop_detail)
             vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
             pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
-            ecoplay_line, available = _allocate_ecoplay(available)
 
         lines = [
             f"🔆 *Horario:* {block['label']}",
             laptop_line,
             vent_line,
             pb_line,
-            ecoplay_line,
             "",
             f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
         ]
@@ -996,10 +887,6 @@ def get_device_state_payload() -> dict:
     # porque este endpoint lo pollean cada 2s, no puede forzar una consulta
     # activa al EcoFlow (ver /api/cargas).
     fits = _compute_device_fits(_gather_metrics(passive=True)) if ECOFLOW_READY else {}
-    # note: subtexto opcional bajo la fila de Ecoplay en "Qué tienes
-    # encendido" (autonomía de su batería propia, el dato que vivía en
-    # Gestión de cargas antes de sacarla).
-    ecoplay_note = _ecoplay_autonomy_note()
     return {
         "devices": [
             {
@@ -1011,7 +898,6 @@ def get_device_state_payload() -> dict:
                 "charged": DEVICE_CHARGED.get(key),
                 "fits": fits.get(key, {}).get("fits"),
                 "deficit_w": fits.get(key, {}).get("deficit_w", 0),
-                "note": ecoplay_note if key == "ecoplay" else None,
             }
             for key, info in DEVICE_INFO.items()
         ]
@@ -1307,43 +1193,11 @@ DASHBOARD_HTML = """<!doctype html>
     transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out);
   }
   .device-btn .name { display: flex; align-items: center; gap: 8px; }
-  .device-btn .name .sub { font-size: 12px; color: #6b7684; font-weight: 400; }
   .fit-dot { font-size: 11px; }
-  .deficit { color: #f87171; font-weight: 700; font-size: 12px; }
   .device-btn .state { font-weight: 700; font-size: 12px; letter-spacing: 0.03em; }
   .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
   .device-btn.on .state { color: #4ade80; }
   .device-btn.off .state { color: #6b7684; }
-  .state-group { display: flex; align-items: center; gap: 10px; }
-  .state-group .state.state-on { color: #4ade80; }
-  .state-group .state.state-off { color: #6b7684; }
-  .modal-backdrop {
-    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-    align-items: center; justify-content: center; padding: 16px; z-index: 100;
-  }
-  .modal-backdrop.visible { display: flex; }
-  .modal-box {
-    background: #141b22; border: 1px solid #232b33; border-radius: 16px;
-    padding: 18px 20px; width: 100%; max-width: 320px;
-  }
-  .modal-title { font-size: 15px; font-weight: 700; color: #f5f5f5; margin-bottom: 12px; }
-  .modal-input {
-    width: 100%; font-size: 16px; padding: 10px 12px; border-radius: 10px;
-    background: #0b0f14; border: 1px solid #232b33; color: #f5f5f5;
-    font-variant-numeric: tabular-nums; margin-bottom: 12px;
-  }
-  .modal-actions { display: flex; gap: 8px; }
-  .modal-btn {
-    flex: 1; font-size: 14px; padding: 9px 12px; border-radius: 10px;
-    background: #1c232b; border: 1px solid #232b33; color: #cbd5e1; cursor: pointer;
-  }
-  .modal-btn-primary { background: #14351f; border-color: #4ade8055; color: #4ade80; font-weight: 700; }
-  .modal-result-ok, .modal-result-warn, .modal-result-error {
-    margin-top: 12px; font-size: 13px; line-height: 1.5; padding: 10px 12px; border-radius: 10px;
-  }
-  .modal-result-ok { background: #14351f; color: #4ade80; }
-  .modal-result-warn { background: #3a1616; color: #f87171; }
-  .modal-result-error { background: #3a1616; color: #f87171; }
   .updated { margin-top: 14px; font-size: 12px; color: #7b8794; }
   .live-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
@@ -1583,26 +1437,6 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="eta-goal" id="eta-goal"></div>
   </div>
 
-  <!-- Modal simple para cargar el % de Ecoplay sin pasar por Telegram.
-       Solo alcanzable tocando el badge "descargada" de Ecoplay en "Qué
-       tienes encendido" (ver renderDevices) — el link standalone "Editar %
-       Ecoplay" que existía antes fue removido por ser un trigger redundante.
-       Reusa el estilo dark de .eta-box (mismo
-       bg #141b22, radios, colores de acento) en vez de
-       inventar un lenguaje visual nuevo. DOM/JS vanilla, sin framework,
-       igual que el resto del dashboard. -->
-  <div class="modal-backdrop" id="ecoplay-modal-backdrop">
-    <div class="modal-box">
-      <div class="modal-title">Ecoplay: % de batería propia</div>
-      <input type="number" id="ecoplay-pct-input" class="modal-input" min="0" max="100" placeholder="0-100">
-      <div class="modal-actions">
-        <button type="button" id="ecoplay-modal-submit" class="modal-btn modal-btn-primary">Aceptar</button>
-        <button type="button" id="ecoplay-modal-close" class="modal-btn">Cerrar</button>
-      </div>
-      <div id="ecoplay-modal-result"></div>
-    </div>
-  </div>
-
   <div class="devices">
     <div class="title">Qué tienes encendido</div>
     <div id="devices"></div>
@@ -1832,125 +1666,13 @@ DASHBOARD_HTML = """<!doctype html>
     function fitDot(dev) {
       return dev.fits == null ? '' : `<span class="fit-dot" title="${dev.fits ? 'Entra en el excedente actual' : 'No entra en el excedente actual'}">${dev.fits ? '🟢' : '🔴'}</span>`;
     }
-    // Déficit en W: solo tiene sentido mostrarlo si el dispositivo está
-    // prendido de verdad Y no entra en el excedente (si está apagado, el
-    // déficit es hipotético y no hace falta ensuciar la fila con eso).
-    function deficitText(dev) {
-      return dev.on && dev.fits === false && dev.deficit_w ? ` <span class="deficit">(-${dev.deficit_w}W)</span>` : '';
-    }
-    // Fuera de ecoplay ya no es clickeable ni marca ON/OFF (a pedido del
-    // usuario): solo queda el punto 🟢/🔴 de fitDot. Ecoplay es el único
-    // dispositivo con estado propio, así que junta acá ambos toggles (on/off
-    // real y cargada/descargada de su batería interna) en una sola fila en
-    // vez de vivir partido entre "Qué tienes encendido" y una sección
-    // "Estado de carga" aparte que antes solo terminaba mostrándolo a él.
     function renderDevices(devices) {
-      document.getElementById('devices').innerHTML = devices.map(dev => {
-        if (dev.key !== 'ecoplay') {
-          return `
-            <div class="device-btn off" data-key="${dev.key}">
-              <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W</span>
-            </div>
-          `;
-        }
-        return `
-          <div class="device-btn ${dev.on ? 'on' : 'off'}" data-key="${dev.key}">
-            <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W${deficitText(dev)}${dev.note ? ` <span class="sub">${dev.note}</span>` : ''}</span>
-            <span class="state-group">
-              <span class="state state-toggle ${dev.on ? 'state-on' : 'state-off'}" data-action="toggle">${dev.on ? 'ON' : 'OFF'}</span>
-              <span class="state state-charge ${dev.charged ? 'state-on' : 'state-off'}" data-action="charge">${dev.charged ? '🔋 cargada' : '🪫 descargada'}</span>
-            </span>
-          </div>
-        `;
-      }).join('');
-      const ecoplayBtn = document.querySelector('.device-btn[data-key="ecoplay"]');
-      if (!ecoplayBtn) return;
-      ecoplayBtn.querySelector('.state-toggle').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const turningOn = !e.currentTarget.classList.contains('state-on');
-        try {
-          const res = await fetch('/api/devices', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ device: 'ecoplay', on: turningOn }),
-          });
-          const d = await res.json();
-          if (d.devices) renderDevices(d.devices);
-        } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
-      });
-      ecoplayBtn.querySelector('.state-charge').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const settingCharged = !e.currentTarget.classList.contains('state-on');
-        // Pasar a "cargada" abre el modal de % en vez de togglear directo
-        // (el % es la fuente de verdad real); pasar a "descargada" sí es un
-        // toggle directo (y el backend ya sincroniza ECOPLAY_LAST_PCT=0
-        // como efecto secundario).
-        if (settingCharged) {
-          openEcoplayModal();
-          return;
-        }
-        try {
-          const res = await fetch('/api/devices/charged', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ device: 'ecoplay', charged: settingCharged }),
-          });
-          const d = await res.json();
-          if (d.devices) renderDevices(d.devices);
-        } catch (e) { /* si falla, el próximo loadDevices() corrige la vista */ }
-      });
+      document.getElementById('devices').innerHTML = devices.map(dev => `
+        <div class="device-btn off" data-key="${dev.key}">
+          <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W</span>
+        </div>
+      `).join('');
     }
-
-    // Modal para editar el % de Ecoplay sin pasar por Telegram (POST
-    // /api/ecoplay). Simplificado: solo entra un % y toca "Aceptar". Único
-    // trigger: el badge "descargada" de Ecoplay en "Qué tienes encendido"
-    // (ver renderDevices) — el link standalone que existía antes fue
-    // removido.
-    function openEcoplayModal() {
-      document.getElementById('ecoplay-modal-result').innerHTML = '';
-      document.getElementById('ecoplay-pct-input').value = '';
-      document.getElementById('ecoplay-modal-backdrop').classList.add('visible');
-    }
-    function closeEcoplayModal() {
-      document.getElementById('ecoplay-modal-backdrop').classList.remove('visible');
-    }
-    document.getElementById('ecoplay-modal-close').addEventListener('click', closeEcoplayModal);
-    document.getElementById('ecoplay-modal-backdrop').addEventListener('click', (e) => {
-      if (e.target.id === 'ecoplay-modal-backdrop') closeEcoplayModal();
-    });
-    document.getElementById('ecoplay-modal-submit').addEventListener('click', async () => {
-      const resultBox = document.getElementById('ecoplay-modal-result');
-      const raw = document.getElementById('ecoplay-pct-input').value;
-      const pct = parseInt(raw, 10);
-      if (raw === '' || isNaN(pct) || pct < 0 || pct > 100) {
-        resultBox.innerHTML = '<div class="modal-result-error">Ingresá un % entero entre 0 y 100.</div>';
-        return;
-      }
-      try {
-        const res = await fetch('/api/ecoplay', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pct })
-        });
-        const d = await res.json();
-        if (!res.ok) {
-          resultBox.innerHTML = `<div class="modal-result-error">${d.error || 'Error'}</div>`;
-          return;
-        }
-        // Informar un % siempre implica que Ecoplay quedó "cargada" (es la
-        // fuente de verdad real del estado de carga), así que sincronizamos
-        // el badge de "Estado de carga" acá también, no solo el % interno.
-        try {
-          await fetch('/api/devices/charged', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ device: 'ecoplay', charged: true })
-          });
-        } catch (e2) { /* si falla, el próximo loadDevices() corrige la vista */ }
-        loadDevices();
-        closeEcoplayModal();
-      } catch (e) {
-        resultBox.innerHTML = '<div class="modal-result-error">No se pudo conectar con el servidor.</div>';
-      }
-    });
 
     refresh();
     loadDevices();
@@ -2049,7 +1771,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             # Mismo contrato que POST /api/devices, pero contra DEVICE_CHARGED
             # en vez de DEVICE_STATE: body {"device": <key>, "charged": bool},
             # 400 si el dispositivo no es válido (solo ventilador1-3,
-            # powerbank1-2, ecoplay), 200 con el mismo payload completo de
+            # powerbank1-2), 200 con el mismo payload completo de
             # get_device_state_payload() si se aplicó.
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -2065,34 +1787,8 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 # mostrándola prendida (mismo criterio que el comando /cargado).
                 if charged:
                     DEVICE_STATE[device] = False
-                # Mismo criterio que /descargado: Ecoplay es la única con
-                # sistema de % propio, sincronizamos su % a 0 al descargarla
-                # desde acá también (ventilador/powerbank no tienen % análogo).
-                if device == "ecoplay" and not charged:
-                    shared_state.ECOPLAY_LAST_PCT = 0
                 shared_state._save_persisted_state()
                 payload = json.dumps(get_device_state_payload()).encode("utf-8")
-                self._send(200, payload, "application/json")
-            except Exception as exc:
-                payload = json.dumps({"error": str(exc)}).encode("utf-8")
-                self._send(500, payload, "application/json")
-        elif self.path == "/api/ecoplay":
-            # Contraparte web de /ecoplay <pct>: body {"pct": 0-100}, valida
-            # rango (400 si inválido), setea y persiste ECOPLAY_LAST_PCT,
-            # corre _ecoplay_autonomy y devuelve el mismo dict (incluye
-            # has_autonomy para que el frontend distinga el caso "sin
-            # autonomía todavía" del resultado normal).
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(length) or b"{}")
-                pct = body.get("pct")
-                if not isinstance(pct, int) or isinstance(pct, bool) or not (0 <= pct <= 100):
-                    self._send(400, b'{"error":"debe ser un porcentaje entero entre 0 y 100"}', "application/json")
-                    return
-                shared_state.ECOPLAY_LAST_PCT = pct
-                shared_state._save_persisted_state()
-                info = _ecoplay_autonomy(shared_state.ECOPLAY_LAST_PCT)
-                payload = json.dumps(info).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
                 payload = json.dumps({"error": str(exc)}).encode("utf-8")

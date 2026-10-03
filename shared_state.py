@@ -8,7 +8,7 @@ es el único lugar donde se definen para que todos apunten al mismo estado.
 IMPORTANTE para quien toque este archivo: los escalares que cambian en
 tiempo de ejecución (WAS_CHARGING_AC, BATTERY_LOW_THRESHOLD,
 WAS_BELOW_LOW_THRESHOLD, WAS_FULL, LAST_AC_TIMESTAMP, OUTAGE_START_TIMESTAMP,
-ECOPLAY_LAST_PCT, _DATA_STALE_ALERTED, STALE_ACK_BY_USER) deben leerse/escribirse siempre como
+_DATA_STALE_ALERTED, STALE_ACK_BY_USER) deben leerse/escribirse siempre como
 `shared_state.NOMBRE` (atributo del módulo) desde los demás archivos, NUNCA
 con `from shared_state import NOMBRE` — un import directo copia el valor de
 en ese momento y no ve las actualizaciones que haga otro módulo (ej.
@@ -123,7 +123,6 @@ MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": 
 
 DEVICE_INFO = {
     "laptop": {"label": "MacBook Pro", "emoji": "", "watts": 70},
-    "ecoplay": {"label": "Ecoplay", "emoji": "📡", "watts": 120},
 }
 for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
     for _i in range(1, _count + 1):
@@ -144,7 +143,6 @@ def _save_persisted_state() -> None:
                     "outage_start_timestamp": OUTAGE_START_TIMESTAMP,
                     "device_state": DEVICE_STATE,
                     "device_charged": DEVICE_CHARGED,
-                    "ecoplay_pct": ECOPLAY_LAST_PCT,
                     "data_stale_alerted": _DATA_STALE_ALERTED,
                     "stale_ack_by_user": STALE_ACK_BY_USER,
                 },
@@ -174,13 +172,5 @@ DEVICE_CHARGED = {
     for b, (c, *_r) in MULTI_UNIT_DEVICES.items()
     for i in range(1, c + 1)
 }
-# Ecoplay entra a /cargado-/descargado como señal manual rápida, informativa
-# nomás — coexiste con /ecoplay <pct> (el sistema más preciso que ya existe
-# para ella) sin reemplazarlo. A diferencia de ventilador/powerbank, Ecoplay
-# es de una sola unidad, así que NO participa del sorteo de prioridad de
-# _multi_unit_line (esa función solo recibe listas de ventilador*/powerbank*
-# — no hay nada que reordenar en un grupo de uno).
-DEVICE_CHARGED["ecoplay"] = bool(_saved_device_charged.get("ecoplay", False))
-ECOPLAY_LAST_PCT = _persisted.get("ecoplay_pct")
 _DATA_STALE_ALERTED = _persisted.get("data_stale_alerted", False)
 STALE_ACK_BY_USER = _persisted.get("stale_ack_by_user", False)
