@@ -13,11 +13,7 @@ _DATA_STALE_ALERTED, STALE_ACK_BY_USER) deben leerse/escribirse siempre como
 con `from shared_state import NOMBRE` — un import directo copia el valor de
 en ese momento y no ve las actualizaciones que haga otro módulo (ej.
 telegram_bot cambia BATTERY_LOW_THRESHOLD con /alerta y dashboard_server
-necesita ver ese cambio en la próxima consulta). DEVICE_STATE y
-DEVICE_CHARGED son la excepción: son dicts que solo se mutan por clave
-(`DEVICE_STATE[key] = ...`), nunca se reasignan enteros, así que un
-`from shared_state import DEVICE_STATE` sí es seguro (todos comparten el
-mismo objeto dict).
+necesita ver ese cambio en la próxima consulta).
 """
 
 import json
@@ -110,26 +106,6 @@ def _load_persisted_state() -> dict:
         return {}
 
 
-# Mapa de cargas que el usuario puede marcar ON/OFF a mano (por Telegram o el
-# panel web) para que el bot sepa qué está realmente encendido en vez de
-# asumirlo solo por el horario del plan. Los watts son los reales confirmados
-# por el usuario durante la sesión, se reusan para el chequeo de anomalía en
-# build_load_advisor_message(). Las cargas con más de una unidad (ventilador,
-# power bank) se desglosan una por una en vez de un solo interruptor
-# combinado, para poder marcar exactamente cuáles están prendidas. Las luces
-# se sacaron de este mapa: se prenden/apagan tan seguido que registrarlas a
-# mano con /on-/off era más carga que valor.
-MULTI_UNIT_DEVICES = {"ventilador": (3, "Ventilador", "🌀", 20), "powerbank": (2, "Power bank", "🔋", 60)}
-
-DEVICE_INFO = {
-    "laptop": {"label": "MacBook Pro", "emoji": "", "watts": 70},
-}
-for _base, (_count, _label, _emoji, _watts) in MULTI_UNIT_DEVICES.items():
-    for _i in range(1, _count + 1):
-        DEVICE_INFO[f"{_base}{_i}"] = {"label": f"{_label} {_i}", "emoji": _emoji, "watts": _watts}
-DEVICE_INFO["ventilador3"]["watts"] = 10  # el tercer ventilador es más chico que los otros dos (20W)
-
-
 def _save_persisted_state() -> None:
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -141,8 +117,6 @@ def _save_persisted_state() -> None:
                     "was_full": WAS_FULL,
                     "last_ac_timestamp": LAST_AC_TIMESTAMP,
                     "outage_start_timestamp": OUTAGE_START_TIMESTAMP,
-                    "device_state": DEVICE_STATE,
-                    "device_charged": DEVICE_CHARGED,
                     "data_stale_alerted": _DATA_STALE_ALERTED,
                     "stale_ack_by_user": STALE_ACK_BY_USER,
                 },
@@ -164,13 +138,5 @@ LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 # (sin persistencia propia más allá del snapshot general de acá) que
 # LAST_AC_TIMESTAMP: sobrevive redeploys porque va en el mismo STATE_FILE.
 OUTAGE_START_TIMESTAMP = _persisted.get("outage_start_timestamp")
-_saved_device_state = _persisted.get("device_state", {})
-DEVICE_STATE = {key: bool(_saved_device_state.get(key, False)) for key in DEVICE_INFO}
-_saved_device_charged = _persisted.get("device_charged", {})
-DEVICE_CHARGED = {
-    f"{b}{i}": bool(_saved_device_charged.get(f"{b}{i}", False))
-    for b, (c, *_r) in MULTI_UNIT_DEVICES.items()
-    for i in range(1, c + 1)
-}
 _DATA_STALE_ALERTED = _persisted.get("data_stale_alerted", False)
 STALE_ACK_BY_USER = _persisted.get("stale_ack_by_user", False)

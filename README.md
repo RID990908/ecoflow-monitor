@@ -82,6 +82,7 @@ Como alternativa se usa la misma API que usa la app móvil de EcoFlow ("Private 
 | Comando | Qué hace |
 | --- | --- |
 | `/reporte` | Informe detallado al instante |
+| `/cargas` | Plan de batería: meta del horario y proyección según la entrada/salida actual |
 | `/alerta <porcentaje>` | Avisar cuando la carga baje de ese nivel (ej: `/alerta 20`) |
 | `/start` | Qué hace el bot |
 | `/help` | Ver comandos disponibles |

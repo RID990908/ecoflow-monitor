@@ -10,7 +10,6 @@ ecoflow_telegram_monitor.py al modularizar el proyecto.
 import os
 import threading
 import time
-import unicodedata
 
 import requests
 
@@ -21,9 +20,6 @@ from shared_state import (
     AC_CHECK_MINUTES,
     BOT_TOKEN,
     CHAT_ID,
-    DEVICE_CHARGED,
-    DEVICE_INFO,
-    MULTI_UNIT_DEVICES,
     QUIET_END_HOUR,
     QUIET_END_MINUTE,
     QUIET_START_HOUR,
@@ -54,10 +50,8 @@ def send_telegram(text: str, chat_id: str = None) -> None:
 def set_bot_commands() -> None:
     commands = [
         {"command": "start", "description": "Qué hace este bot"},
-        {"command": "reporte", "description": "Informe detallado por dispositivo"},
-        {"command": "cargas", "description": "Qué encender/apagar ahora según el plan"},
-        {"command": "on", "description": "Marcar un dispositivo como encendido (ej: /on laptop)"},
-        {"command": "off", "description": "Marcar un dispositivo como apagado (ej: /off laptop)"},
+        {"command": "reporte", "description": "Informe detallado (Delta 2 y batería extra)"},
+        {"command": "cargas", "description": "Plan de batería: meta y proyección según entrada/salida"},
         {"command": "alerta", "description": "Avisar cuando la carga baje de X% (ej: /alerta 20)"},
         {"command": "help", "description": "Ver comandos disponibles"},
     ]
@@ -98,13 +92,8 @@ def set_dashboard_menu_button() -> None:
 
 HELP_TEXT = (
     "🤖 *Monitor EcoFlow*\n\n"
-    "/reporte — informe detallado, por dispositivo (Delta 2 y batería extra)\n"
-    "/cargas — qué debería estar encendido/apagado ahora mismo según el plan\n"
-    "/on <dispositivo> — marcarlo encendido (laptop, ventilador, powerbank)\n"
-    "/off <dispositivo> — marcarlo apagado\n"
-    "/cargado <ventilador/powerbank> — marcar como cargada; además prioriza el resto en el "
-    "próximo reparto de excedente (ej: /cargado ventilador1 ventilador2)\n"
-    "/descargado <ventilador/powerbank> — marcarla como descargada (prioridad para recibir carga)\n"
+    "/reporte — informe detallado (Delta 2 y batería extra)\n"
+    "/cargas — plan de batería: meta y proyección según la entrada/salida actual\n"
     "/alerta <porcentaje> — avisar cuando la carga baje de ese nivel (ej: /alerta 20)\n"
     "/fuiyo — si apagaste vos la Delta 2 y te llegó el aviso de \"no recibo datos\", "
     "mandá esto para que no te siga avisando hasta que vuelva\n"
@@ -112,7 +101,7 @@ HELP_TEXT = (
     "/help — ver esta ayuda\n\n"
     f"Informe automático cada 45 min mientras no hay corriente (pausado de {QUIET_START_HOUR:02d}:{QUIET_START_MINUTE:02d} a "
     f"{QUIET_END_HOUR:02d}:{QUIET_END_MINUTE:02d}) — incluye el detalle de batería/puertos y, en el mismo mensaje, "
-    "qué encender/apagar según el plan. Chequeo de carga AC cada "
+    "el plan de batería (meta y proyección). Chequeo de carga AC cada "
     f"{AC_CHECK_MINUTES:g} min, también te aviso al llegar a 100% de carga.\n\n"
     "⚠️ Y si el ritmo de descarga proyecta que vas a llegar corto a la meta "
     "(65-75% a las 3 PM, 100% al anochecer si te mantenés en internet nomás), "
@@ -121,94 +110,18 @@ HELP_TEXT = (
 START_TEXT = "👋 Hola, soy el monitor de tu EcoFlow.\n\n" + HELP_TEXT
 
 
-_DEVICE_ALIASES = {
-    "power": "powerbank", "bank": "powerbank", "powerbanks": "powerbank",
-    "ventiladores": "ventilador", "fan": "ventilador", "fans": "ventilador",
-    "pc": "laptop", "compu": "laptop", "computadora": "laptop",
-}
-
-
-def _resolve_device_keys(word: str) -> list:
-    """Saca acentos/espacios y matchea contra DEVICE_INFO (o un alias común).
-    Para las cargas con varias unidades (ventilador, powerbank):
-    con número al final devuelve esa unidad puntual (ej. 'ventilador2' o
-    'fan 2' → ['ventilador2']); sin número devuelve TODAS las unidades de esa
-    categoría (ej. 'powerbank' → ['powerbank1','powerbank2']). Lista vacía si
-    no reconoce nada."""
-    word = word.strip().lower().replace(" ", "")
-    word = "".join(c for c in unicodedata.normalize("NFD", word) if unicodedata.category(c) != "Mn")
-    match = None
-    for i in range(len(word), 0, -1):
-        if word[:i].isalpha():
-            match = (word[:i], word[i:])
-            break
-    if match is None:
-        return []
-    base, num = match
-    base = _DEVICE_ALIASES.get(base, base)
-    if base in MULTI_UNIT_DEVICES:
-        count = MULTI_UNIT_DEVICES[base][0]
-        if num:
-            key = f"{base}{num}"
-            return [key] if key in DEVICE_INFO else []
-        return [f"{base}{i}" for i in range(1, count + 1)]
-    if num:
-        return []  # "laptop2" no existe, es de una sola unidad
-    return [base] if base in DEVICE_INFO else []
-
-
 def handle_command(text: str, chat_id: str) -> None:
     parts = text.strip().split()
     cmd = parts[0].split("@")[0].lower()
     if cmd == "/reporte":
         send_telegram(dashboard_server.build_report(), chat_id=chat_id)
     elif cmd == "/cargas":
-        msg = dashboard_server.build_load_advisor_message()
+        msg = dashboard_server.build_battery_plan_message()
         if not msg:
             msg = (
-                "🌙 Fuera de franja (6:00 AM–12:00 AM): internet ON, resto OFF."
+                "🌙 Fuera de franja (6:00 AM–12:00 AM): sin plan de batería."
             )
         send_telegram(msg, chat_id=chat_id)
-    elif cmd in ("/on", "/off"):
-        if len(parts) < 2:
-            send_telegram(f"Uso: {cmd} <dispositivo> — {', '.join(DEVICE_INFO)}", chat_id=chat_id)
-        else:
-            keys = _resolve_device_keys(parts[1])
-            if not keys:
-                send_telegram(f"No reconozco '{parts[1]}'. Dispositivos: {', '.join(DEVICE_INFO)}", chat_id=chat_id)
-            else:
-                estado = "ON" if cmd == "/on" else "OFF"
-                for key in keys:
-                    shared_state.DEVICE_STATE[key] = cmd == "/on"
-                shared_state._save_persisted_state()
-                lines = [f"{DEVICE_INFO[k]['emoji']} {DEVICE_INFO[k]['label']}: marcado {estado}" for k in keys]
-                send_telegram("\n".join(lines), chat_id=chat_id)
-    elif cmd in ("/cargado", "/descargado"):
-        if len(parts) < 2:
-            send_telegram(f"Uso: {cmd} <dispositivo> — {', '.join(DEVICE_CHARGED)}", chat_id=chat_id)
-        else:
-            resolved, invalid = [], []
-            for w in parts[1:]:
-                valid = [k for k in _resolve_device_keys(w) if k in DEVICE_CHARGED]
-                (resolved.extend(valid) if valid else invalid.append(w))
-            em = "🔋" if cmd == "/cargado" else "🪫"
-            estado = "cargada" if cmd == "/cargado" else "descargada"
-            lines = []
-            if resolved:
-                for k in resolved:
-                    shared_state.DEVICE_CHARGED[k] = cmd == "/cargado"
-                    # Cargada implica que ya no está en uso: si estaba encendida
-                    # (DEVICE_STATE) se apaga sola, para que "Qué tienes
-                    # encendido" no siga mostrándola prendida.
-                    if cmd == "/cargado":
-                        shared_state.DEVICE_STATE[k] = False
-                shared_state._save_persisted_state()
-                lines.extend(f"{em} {DEVICE_INFO[k]['label']}: {estado}" for k in resolved)
-            if invalid:
-                lines.append(
-                    f"No reconozco / no es multi-unidad: {', '.join(invalid)}. Solo: {', '.join(DEVICE_CHARGED)}"
-                )
-            send_telegram("\n".join(lines), chat_id=chat_id)
     elif cmd == "/alerta":
         if len(parts) < 2 or not parts[1].isdigit() or not (0 <= int(parts[1]) <= 100):
             send_telegram("Uso: /alerta <porcentaje entre 0 y 100>, ej: /alerta 20", chat_id=chat_id)

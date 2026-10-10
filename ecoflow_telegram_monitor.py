@@ -271,11 +271,9 @@ _projection_alerted_for = {}  # {checkpoint_min: date} último día que ya se av
 
 def _check_battery_projection(now=None) -> None:
     """Un chequeo: proyecta el %SOC en el próximo checkpoint con el ritmo de
-    descarga actual. Si va a quedar por debajo de la meta menos el margen y
-    bajar carga discrecional ayudaría, avisa por Telegram (una vez por
-    checkpoint/día, con rearme si se recupera). Si ni apagando todo se llega
-    a la meta (problema de sol, no de consumo), no manda nada — esa info ya
-    se ve en vivo en el dashboard/app (threshold_short en el aro)."""
+    descarga actual. Si va a quedar por debajo de la meta menos el margen,
+    avisa por Telegram (una vez por checkpoint/día, con rearme si se
+    recupera)."""
     now = now or datetime.now(TZ)
     minute_of_day = now.hour * 60 + now.minute
     if not (LOAD_ADVISOR_START_MIN <= minute_of_day < LOAD_ADVISOR_END_MIN):
@@ -296,39 +294,14 @@ def _check_battery_projection(now=None) -> None:
         return
     if projected < floor - PROJECTION_ALERT_MARGIN:
         if _projection_alerted_for.get(cp_min) != today:
-            # "Mejor caso": cuánto cambiaría la proyección si apagaras TODA la
-            # carga discrecional marcada (laptop, ventilador, power bank —
-            # internet queda afuera porque es protegido). Si ni así
-            # se llega a la meta, decir "bajá carga" es engañoso: el problema
-            # no es cuánto estás gastando, es que no hay sol suficiente.
-            discretionary_keys = ["laptop"] + dashboard_server.VENTILADOR_DEVICE_KEYS + dashboard_server.POWERBANK_DEVICE_KEYS
-            freeable_w = sum(dashboard_server.DEVICE_INFO[k]["watts"] for k in discretionary_keys if shared_state.DEVICE_STATE.get(k))
-            best_case_net_w = m["system_net_w"] + freeable_w
-            best_proj = dashboard_server._project_to_checkpoint(now, m["avg_soc"], best_case_net_w)
-            best_case_helps = best_proj is not None and best_proj[2] >= floor - PROJECTION_ALERT_MARGIN
-
-            if best_case_helps:
-                telegram_bot.send_telegram(
-                    "⚠️ *Se está yendo de control*\n\n"
-                    f"Proyectás *{projected:.0f}%* para {label} (meta {floor}%+)\n"
-                    f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n\n"
-                    "Bajá carga (laptop, power bank, ventilador)."
-                )
-                _projection_alerted_for[cp_min] = today
-                log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
-            else:
-                # Ni apagando todo lo que se puede llegás a la meta: no es
-                # problema de consumo, no hay sol suficiente en lo que queda.
-                # Ya no se manda nada por Telegram acá — el dashboard/app
-                # ahora muestran en vivo la alerta de umbral de batería baja
-                # dentro del aro (threshold_short), así que un mensaje aparte
-                # con la misma info es redundante (el usuario ya lo tiene a
-                # la vista sin necesidad de un push).
-                _projection_alerted_for[cp_min] = today
-                log.info(
-                    "Proyección de batería por debajo de meta sin acción posible (checkpoint %s) — sin aviso, redundante con el dashboard",
-                    label,
-                )
+            telegram_bot.send_telegram(
+                "⚠️ *Se está yendo de control*\n\n"
+                f"Proyectás *{projected:.0f}%* para {label} (meta {floor}%+)\n"
+                f"Vas en {m['avg_soc']:.1f}%, descargando a {round(m['system_net_w'])} W.\n\n"
+                "La batería se está descargando más rápido de lo necesario para llegar a la meta."
+            )
+            _projection_alerted_for[cp_min] = today
+            log.info("Alerta de proyección de batería enviada (checkpoint %s)", label)
     elif _projection_alerted_for.get(cp_min) == today:
         del _projection_alerted_for[cp_min]
 

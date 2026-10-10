@@ -1,6 +1,6 @@
 """Dashboard web (HTTP puro, sin framework) + toda la lógica de cálculo de
 métricas/mensajes que alimenta tanto ese dashboard como el bot de Telegram
-(_gather_metrics, build_report, build_load_advisor_message, etc. se generan
+(_gather_metrics, build_report, build_battery_plan_message, etc. se generan
 acá una sola vez y las consume también telegram_bot.py). Extraído de
 ecoflow_telegram_monitor.py al modularizar el proyecto.
 
@@ -14,14 +14,13 @@ separadas en piezas más chicas.
 
 import http.server
 import json
-import math
 import os
 import time
 from datetime import datetime, timedelta
 
 import mqtt_client
 import shared_state
-from shared_state import DEVICE_CHARGED, DEVICE_INFO, DEVICE_STATE, ECOFLOW_READY, MULTI_UNIT_DEVICES, SN_DELTA2, TZ, log
+from shared_state import ECOFLOW_READY, SN_DELTA2, TZ, log
 
 
 def _pick(data: dict, *keys, default=None):
@@ -263,7 +262,7 @@ def _gather_metrics(passive: bool = False) -> dict:
 
     # Si falla la lectura de una de las dos (hueco momentáneo de datos por
     # MQTT), promediar solo con la que sí llegó en vez de perder avg_soc del
-    # todo — importa para que el chequeo de emergencia de batería no se quede
+    # todo — importa para que el cálculo de la proyección no se quede
     # ciego justo cuando más hace falta.
     if soc_delta2 is not None and soc_extra is not None:
         avg_soc = round((soc_delta2 + soc_extra) / 2, 1)
@@ -403,43 +402,29 @@ def build_report(m: dict = None) -> str:
     return _format_report(m)
 
 
-# --- Gestión de cargas: mensaje aparte del informe, cada 30 min entre 6:00 y
-# 19:30, que dice qué debería estar encendido/apagado según el excedente real
-# del sistema (que cubre las 24 h: la noche solo se consulta por /cargas, el
-# timer automático no manda mensajes fuera de esa ventana). Laptop,
-# Ventilador y Power bank se reparten el excedente real en orden de
-# prioridad (ver build_load_advisor_message) — ninguna tiene ventana horaria
-# fija, todas se evalúan contra system_net_w en el momento de la consulta.
-BATTERY_EMERGENCY_THRESHOLD = 25  # debajo de esto, prioridad estricta: internet > resto
-
-# emergency_ok=False entre 12 AM y 6 AM: sin sol y de madrugada no tiene
-# sentido activar la emergencia de batería (ver _compute_device_fits /
-# build_load_advisor_message), es la única ventana horaria fija que queda.
-# Laptop, power bank y ventilador NO tienen ventanas horarias propias: se
-# habilitan o no según el excedente real del sistema (system_net_w) en el
-# momento de la consulta, sin importar la hora que sea. La ÚNICA excepción es
-# el ORDEN de prioridad de Laptop dentro de esa cola (ver
-# _laptop_deprioritized y build_load_advisor_message): de 2 PM a 7 AM pasa a
-# evaluarse último (después de Ventilador y Power bank) en vez de
-# primero — es de horario, no de encendido/apagado.
+# --- Plan de batería: mensaje aparte del informe, cada 30 min entre 6:00 y
+# 19:30, que dice la meta de batería del bloque horario actual y si, con el
+# ritmo real de entrada/salida del sistema (system_net_w), se va a cumplir
+# (la noche solo se consulta por /cargas, el timer automático no manda
+# mensajes fuera de esa ventana).
 _LOAD_SCHEDULE = [
-    {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM", "emergency_ok": True,
+    {"start": 6 * 60, "end": 7 * 60, "label": "6:00–7:00 AM",
      "battery_goal": "Sin sol aún, ~-2%"},
-    {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM", "emergency_ok": True,
+    {"start": 7 * 60, "end": 9 * 60, "label": "7:00–9:00 AM",
      "battery_goal": "Sube lento con el primer sol"},
-    {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM", "emergency_ok": True,
+    {"start": 9 * 60, "end": 12 * 60, "label": "9:00 AM–12:00 PM",
      "battery_goal": "~55-60% al mediodía"},
-    {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM", "emergency_ok": True,
+    {"start": 12 * 60, "end": 15 * 60, "label": "12:00–3:00 PM",
      "battery_goal": "65–75% a las 3 PM"},
-    {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM", "emergency_ok": True,
+    {"start": 15 * 60, "end": 16 * 60 + 30, "label": "3:00–4:30 PM",
      "battery_goal": "Mantener con el sol restante"},
-    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM", "emergency_ok": True,
+    {"start": 16 * 60 + 30, "end": 18 * 60 + 30, "label": "4:30–6:30 PM",
      "battery_goal": "Cerca del 100% si se mantuvo solo con internet"},
-    {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM", "emergency_ok": True,
+    {"start": 18 * 60 + 30, "end": 19 * 60 + 30, "label": "6:30–7:30 PM",
      "battery_goal": "Cerrar el día en 100%"},
-    {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM", "emergency_ok": True,
+    {"start": 19 * 60 + 30, "end": 24 * 60, "label": "7:30 PM–12:00 AM",
      "battery_goal": "Bajando controlado"},
-    {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM", "emergency_ok": False,
+    {"start": 0, "end": 6 * 60, "label": "12:00–6:00 AM",
      "battery_goal": "Amanecer con 15%+"},
 ]
 
@@ -453,219 +438,11 @@ def _current_load_block(now=None) -> dict:
     return None
 
 
-def _status_line(emoji: str, label: str, plan_ok: bool, device_keys: list, detail: str = "") -> str:
-    """Une los dos conceptos que antes se confundían bajo el mismo 'ON/OFF':
-    el semáforo (🟢/🔴) es lo que dice el PLAN (¿se puede tener encendido
-    ahora?), y el texto ON/OFF es lo que vos marcaste de verdad con
-    /on-/off — son cosas distintas y pueden no coincidir (ej. 🔴 ON = el plan
-    dice que había que apagarlo pero lo tenés marcado prendido). Para laptop
-    (una sola unidad)."""
-    dot = "🟢" if plan_ok else "🔴"
-    state_text = "ON" if DEVICE_STATE.get(device_keys[0]) else "OFF"
-    line = f"{emoji} {label}: {dot} {state_text}"
-    if detail:
-        line += f" ({detail})"
-    return line
-
-
-def _multi_unit_fits(device_keys: list, available_w) -> tuple:
-    """Núcleo de asignación para dispositivos multi-unidad (ventilador/power
-    bank). Las unidades marcadas `cargada` (ver DEVICE_CHARGED) no compiten
-    por el excedente para nada: ya tienen su propia batería llena, corren
-    solas y se pueden conectar sin condición — quedan con fits=True (🟢) y
-    no restan del presupuesto. Solo las NO cargadas entran a la cola, en
-    orden, y van descontando su watiaje del excedente disponible. Devuelve
-    (dict[key, bool] de si esa unidad entra ahora mismo, dict[key, int] de
-    cuánto le falta si NO entra (0 si entra o si está cargada), excedente
-    restante para lo que venga después en la cadena de prioridad). Separado
-    de _multi_unit_line para que _compute_device_fits (el punto 🟢/🔴 y el
-    déficit en W que se pegan a cada fila de "Qué tienes encendido") pueda
-    reusar exactamente esta misma asignación sin duplicar el orden/sorteo —
-    si esto cambia, tanto el mensaje del bot como el punto por fila quedan
-    consistentes automáticamente."""
-    remaining = max(0, available_w) if available_w is not None else 0
-    fit_by_key = {}
-    deficit_by_key = {}
-    for key in device_keys:
-        if DEVICE_CHARGED.get(key, False):
-            fit_by_key[key] = True
-            deficit_by_key[key] = 0
-            continue
-        watts = DEVICE_INFO[key]["watts"]
-        if watts <= remaining:
-            fit_by_key[key] = True
-            deficit_by_key[key] = 0
-            remaining -= watts
-        else:
-            fit_by_key[key] = False
-            deficit_by_key[key] = round(watts - remaining)
-    return fit_by_key, deficit_by_key, remaining
-
-
-def _multi_unit_line(emoji: str, label: str, device_keys: list, available_w) -> tuple:
-    """Para power bank / ventilador (varias unidades, cada una con
-    su propio watiaje): un punto 🟢/🔴 por unidad (ver _multi_unit_fits). El
-    marcado real (/on-/off) va pegado a cada dot con un ✓ — son datos
-    distintos (uno es "cuánto aguanta el sistema", el otro es "qué tenés
-    prendido de verdad") pero van juntos en vez de un conteo aparte. Si
-    TODAS las unidades están marcadas, se resume con un solo ✅ al final en
-    vez de repetir el ✓ en cada una.
-
-    El detalle de watts (mismo estilo que laptop: "necesitas X W,
-    tienes Y W") solo se muestra si hace falta actuar: alguna unidad
-    marcada ON de verdad está en rojo. X es la suma de TODAS las unidades
-    marcadas (lo que pediste en total), no solo las que no entraron.
-
-    `available_w` ya viene descontado de lo que se llevaron las cargas de
-    mayor prioridad (ver _allocate_budget) — no es el excedente total del
-    sistema, es lo que queda para ESTA carga en particular."""
-    original_available = max(0, available_w) if available_w is not None else 0
-    fit_by_key, _deficit_by_key, remaining = _multi_unit_fits(device_keys, original_available)
-    # 🟢/🔴 según si entra en el excedente actual (ver _multi_unit_fits) —
-    # cargada siempre da fit=True, corre de su propia batería.
-    dot_by_key = {k: ("🟢" if fit_by_key[k] else "🔴") for k in device_keys}
-    dots = [dot_by_key[key] for key in device_keys]  # render in original order
-    on_count = sum(1 for k in device_keys if DEVICE_STATE.get(k))
-    if on_count == len(device_keys):
-        dots_str = " ".join(dots) + " ✅"
-    else:
-        dots_str = " ".join(
-            f"{dot}✓" if DEVICE_STATE.get(key) else dot
-            for dot, key in zip(dots, device_keys)
-        )
-    line = f"{emoji} {label}: {dots_str}"
-    # Solo cuenta como "acción pendiente" (y solo se suma al presupuesto
-    # necesario) lo que está prendido, en rojo, Y NO cargado — una unidad
-    # cargada y prendida corre de su propia batería, no le pide nada al
-    # sistema aunque el usuario la tenga marcada ON.
-    actionable = any(
-        DEVICE_STATE.get(key) and not fit_by_key[key] for key in device_keys
-    )
-    if actionable:
-        needed = sum(
-            DEVICE_INFO[key]["watts"]
-            for key in device_keys
-            if DEVICE_STATE.get(key) and not DEVICE_CHARGED.get(key, False)
-        )
-        line += f" — necesitas {needed} W, tienes {round(original_available)} W"
-    return line, remaining
-
-
-def _allocate_budget(watts: int, available_w) -> tuple:
-    """Descuenta `watts` del excedente disponible si entra, y devuelve
-    (ok, detail, excedente_restante) — la pieza que permite que Laptop,
-    Power bank y Ventilador se repartan el MISMO excedente en vez de que
-    cada uno lo evalúe por separado contra el total (eso hacía que
-    aparecieran varias en verde a la vez aunque juntas no entraran)."""
-    if available_w is None:
-        return True, "", None
-    remaining = max(0, available_w)
-    if watts <= remaining:
-        return True, "", remaining - watts
-    return False, f"necesitas {watts} W, tienes {round(remaining)} W", remaining
-
-
-POWERBANK_DEVICE_KEYS = [f"powerbank{i}" for i in range(1, MULTI_UNIT_DEVICES["powerbank"][0] + 1)]
-VENTILADOR_DEVICE_KEYS = [f"ventilador{i}" for i in range(1, MULTI_UNIT_DEVICES["ventilador"][0] + 1)]
-
-_BATTERY_EMERGENCY_ACTIVE = False  # trackea la transición para loguear una sola vez al entrar/salir, no en cada llamada
-
-
-def _laptop_deprioritized(now=None) -> bool:
-    """True entre las 14:00 (2 PM) y las 7:00 AM (ventana que cruza
-    medianoche): en ese horario la Laptop pasa a evaluarse ÚLTIMA en la cola
-    de excedente (después de Ventilador y Power bank) en vez de
-    primero. Entre las 7:00 y las 14:00 mantiene su posición normal
-    (primera). Es el mismo estilo de chequeo hora del día que usa
-    _current_load_block: minute_of_day contra un rango, acá con wraparound
-    porque el rango cruza la medianoche. Ojo: esto solo cambia el ORDEN DE
-    ASIGNACIÓN del excedente (quién se lleva el presupuesto primero) — el
-    texto de la Laptop se sigue mostrando siempre en el mismo lugar del
-    mensaje (Laptop, Ventilador, Power bank) para no reordenar el
-    mensaje dos veces por día; lo que cambia es a quién le toca 🟢 primero
-    cuando el excedente no alcanza para todas."""
-    now = now or datetime.now(TZ)
-    minute_of_day = now.hour * 60 + now.minute
-    return not (7 * 60 <= minute_of_day < 14 * 60)
-
-
-def _compute_device_fits(m: dict = None, now=None) -> dict:
-    """Único cálculo de fondo para el punto 🟢/🔴 y el déficit en W por
-    dispositivo: corre la MISMA cadena de prioridad/orden que
-    build_load_advisor_message (Laptop > Ventilador > Power bank,
-    con el reordenamiento nocturno de _laptop_deprioritized), pero
-    devuelve un dict plano {device_key: {"fits": bool, "deficit_w": int}} en
-    vez de armar texto. Se usa para pegar el punto y el déficit directo en
-    cada fila de "Qué tienes encendido" (ver get_device_state_payload) sin
-    mantener una segunda cuenta de excedente aparte — misma fuente de verdad
-    que el mensaje de Telegram/dashboard, así nunca pueden mostrar
-    resultados distintos entre sí.
-
-    OJO: la SECUENCIA de asignación (quién pide primero) está escrita acá de
-    nuevo en vez de compartir una sola función con build_load_advisor_message
-    porque esa función arma texto línea por línea y mezclar ambas cosas la
-    hacía más difícil de leer/tocar sin romper el mensaje del bot. Si el
-    ORDEN de prioridad cambia, hay que tocarlo en los dos lados (acá y en
-    build_load_advisor_message) — los cálculos de watts en sí (_allocate_budget,
-    _multi_unit_fits) sí son compartidos y no se duplican."""
-    now = now or datetime.now(TZ)
-    if m is None:
-        m = _gather_metrics(passive=True)
-    fits = {key: {"fits": True, "deficit_w": 0} for key in DEVICE_INFO}
-    # Con corriente de la calle no hay excedente que repartir: todo corre de
-    # la red, no de la batería, así que se puede conectar sin condición (ver
-    # misma lógica en build_load_advisor_message).
-    if m.get("has_ac"):
-        return fits
-    block = _current_load_block(now)
-    if block is None:
-        return fits
-    emergency = block["emergency_ok"] and m["avg_soc"] is not None and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
-    if emergency:
-        for key in DEVICE_INFO:
-            fits[key] = {"fits": False, "deficit_w": DEVICE_INFO[key]["watts"]}
-        return fits
-    available = m["system_net_w"]
-
-    def _laptop_fits(available_w):
-        watts = DEVICE_INFO["laptop"]["watts"]
-        ok, _detail, remaining = _allocate_budget(watts, available_w)
-        info = {"fits": ok, "deficit_w": 0 if ok else round(watts - remaining)}
-        return info, remaining
-
-    def _multi_unit_fit_info(device_keys, available_w):
-        fit_by_key, deficit_by_key, remaining = _multi_unit_fits(device_keys, available_w)
-        return {k: {"fits": fit_by_key[k], "deficit_w": deficit_by_key[k]} for k in device_keys}, remaining
-
-    if _laptop_deprioritized(now):
-        vent_fits, available = _multi_unit_fit_info(VENTILADOR_DEVICE_KEYS, available)
-        pb_fits, available = _multi_unit_fit_info(POWERBANK_DEVICE_KEYS, available)
-        fits.update(vent_fits)
-        fits.update(pb_fits)
-        fits["laptop"], available = _laptop_fits(available)
-    else:
-        fits["laptop"], available = _laptop_fits(available)
-        vent_fits, available = _multi_unit_fit_info(VENTILADOR_DEVICE_KEYS, available)
-        pb_fits, available = _multi_unit_fit_info(POWERBANK_DEVICE_KEYS, available)
-        fits.update(vent_fits)
-        fits.update(pb_fits)
-    return fits
-
-
-def build_load_advisor_message(m: dict = None) -> str:
-    """Laptop, Ventilador y Power bank — cada una ya evalúa el
-    estado real (watts, batería) en vez de ser un texto fijo. Prioridad:
-    Laptop > Ventilador > Power bank — se reparten el MISMO
-    excedente (system_net_w) en orden, restando lo que cada una se lleva
-    antes de evaluar la siguiente (salvo entre 14:00 y 7:00, ver
-    _laptop_deprioritized: ahí Laptop pasa a evaluarse último). Antes cada
-    una miraba el excedente total por separado, lo que podía mostrar varias
-    en verde a la vez aunque juntas no entraran. Por debajo de
-    BATTERY_EMERGENCY_THRESHOLD se apaga TODO (sin
-    excepción de 'es internet, dejalo prendido') — salvo que haya corriente
-    de la calle: ahí no hay excedente que cuidar (todo corre de la red, no
-    de la batería), así que ninguna carga compite por presupuesto y no hay
-    emergencia posible."""
+def build_battery_plan_message(m: dict = None) -> str:
+    """Plan de batería del bloque horario actual: la meta (battery_goal) y,
+    si hay datos, la proyección al próximo checkpoint según el ritmo real de
+    entrada/salida del sistema (system_net_w). Devuelve "" fuera de los
+    bloques definidos en _LOAD_SCHEDULE."""
     block = _current_load_block()
     if block is None:
         return ""
@@ -673,71 +450,10 @@ def build_load_advisor_message(m: dict = None) -> str:
     if m is None:
         m = _gather_metrics()
     avg_soc_str = f"{m['avg_soc']:.1f}%" if m["avg_soc"] is not None else "N/D"
-    emergency = (
-        not m["has_ac"]
-        and block["emergency_ok"]
-        and m["avg_soc"] is not None
-        and m["avg_soc"] < BATTERY_EMERGENCY_THRESHOLD
-    )
-
-    global _BATTERY_EMERGENCY_ACTIVE
-    if emergency and not _BATTERY_EMERGENCY_ACTIVE:
-        log.warning("Emergencia de batería iniciada: %.1f%% (umbral %d%%)", m["avg_soc"], BATTERY_EMERGENCY_THRESHOLD)
-        _BATTERY_EMERGENCY_ACTIVE = True
-    elif not emergency and _BATTERY_EMERGENCY_ACTIVE:
-        log.info("Emergencia de batería terminada: %.1f%%", m["avg_soc"])
-        _BATTERY_EMERGENCY_ACTIVE = False
-
-    if emergency:
-        vent_line, _ = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, 0)
-        pb_line, _ = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, 0)
-        lines = [
-            f"🔆 *Horario:* {block['label']}",
-            f"🚨 EMERGENCIA DE BATERÍA — {avg_soc_str}, apagar todo",
-            _status_line("", "MacBook Pro", False, ["laptop"]),
-            vent_line,
-            pb_line,
-            "",
-            f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
-        ]
-    else:
-        # Con corriente de la calle, excedente "infinito": nada compite por
-        # presupuesto, todo entra (ver misma lógica en _compute_device_fits).
-        available = math.inf if m["has_ac"] else m["system_net_w"]
-
-        def _allocate_laptop(available_w):
-            ok, detail, remaining = _allocate_budget(DEVICE_INFO["laptop"]["watts"], available_w)
-            if ok or not DEVICE_STATE.get("laptop"):
-                detail = ""  # sin acción pendiente: ya está OFF, no hace falta el numero
-            return ok, detail, remaining
-
-        # Orden de asignación del excedente: normalmente Laptop va primero.
-        # Entre las 14:00 y las 7:00 (_laptop_deprioritized) el usuario pidió
-        # que la Laptop pase a MÍNIMA prioridad — se evalúa último, después
-        # de Ventilador y Power bank — porque de noche prefiere
-        # reservar el excedente para esas otras cargas antes que la laptop.
-        # El texto sigue apareciendo siempre en el mismo orden de lectura
-        # (Laptop, Ventilador, Power bank) — solo cambia a quién le
-        # toca 🟢 primero cuando escasea.
-        if _laptop_deprioritized(now):
-            vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
-            pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
-            laptop_ok, laptop_detail, available = _allocate_laptop(available)
-            laptop_line = _status_line("", "MacBook Pro", laptop_ok, ["laptop"], laptop_detail)
-        else:
-            laptop_ok, laptop_detail, available = _allocate_laptop(available)
-            laptop_line = _status_line("", "MacBook Pro", laptop_ok, ["laptop"], laptop_detail)
-            vent_line, available = _multi_unit_line("🌀", "Ventilador", VENTILADOR_DEVICE_KEYS, available)
-            pb_line, available = _multi_unit_line("🔋", "Power bank", POWERBANK_DEVICE_KEYS, available)
-
-        lines = [
-            f"🔆 *Horario:* {block['label']}",
-            laptop_line,
-            vent_line,
-            pb_line,
-            "",
-            f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
-        ]
+    lines = [
+        f"🔆 *Horario:* {block['label']}",
+        f"🎯 Meta: {block['battery_goal']} (ahora {avg_soc_str})",
+    ]
     proj = _project_to_checkpoint(now, m["avg_soc"], m["system_net_w"])
     if proj:
         proj_label, proj_floor, proj_pct = proj
@@ -788,15 +504,15 @@ BATTERY_CHECKPOINTS = [
     (15 * 60, 65, "las 3:00 PM"),
     (19 * 60 + 30, 100, "el cierre del día (7:30 PM)"),
 ]  # ordenados por hora del día — el orden importa para _next_checkpoint. El
-# checkpoint de las 9 AM coincide con el cierre del bloque de gestión de
-# cargas de esa franja — así la proyección de /cargas siempre habla del
+# checkpoint de las 9 AM coincide con el cierre del bloque del plan de
+# batería de esa franja — así la proyección de /cargas siempre habla del
 # mismo horizonte que el período que se está mostrando, en vez de saltar
 # directo al mediodía y generar confusión (ej. "estamos en el período de
 # hasta las 9 pero dice que para el mediodía"). El
 # 100% del cierre solo es realista si te mantenés en internet nomás
-# (laptop/ventilador/power bank se comen el excedente que hace falta
-# para juntar esa carga) — confirmado con el usuario, no es un objetivo
-# válido bajo uso mixto normal.
+# (cualquier otro consumo se come el excedente que hace falta para juntar
+# esa carga) — confirmado con el usuario, no es un objetivo válido bajo uso
+# mixto normal.
 
 
 def _next_checkpoint(now):
@@ -853,7 +569,7 @@ def _log_checkpoint_result(now, avg_soc) -> None:
 
 
 def build_combined_message() -> str:
-    """Junta el informe detallado y la gestión de cargas en un solo mensaje
+    """Junta el informe detallado y el plan de batería en un solo mensaje
     de Telegram — antes eran dos timers separados que mandaban dos mensajes
     casi al mismo minuto, con contenido parecido (batería, entrada/salida)
     aunque no idéntico. Un solo envío, más fácil de leer de una. Lee
@@ -869,7 +585,7 @@ def build_combined_message() -> str:
         log.exception("Error consultando la Delta 2")
         return f"📊 *Informe EcoFlow*\n\n⚠️ Error al consultar la Delta 2: {exc}"
     report = build_report(m)
-    cargas = build_load_advisor_message(m)
+    cargas = build_battery_plan_message(m)
     if not cargas:
         return report
     return report + "\n\n➖➖➖➖➖➖➖➖➖➖\n\n" + cargas
@@ -877,31 +593,6 @@ def build_combined_message() -> str:
 
 # --- Dashboard web: la misma info que el bot, en vivo, sin tener que pedirla ---
 PORT = int(os.environ.get("PORT", "8080"))
-
-
-def get_device_state_payload() -> dict:
-    # fits/deficit_w: mismo punto 🟢/🔴 y déficit en W que build_load_advisor_message
-    # (ver _compute_device_fits), pegados directo a cada dispositivo acá para
-    # que el frontend (web+Expo) no tenga que cruzar dos listas separadas
-    # para saber "está prendido" y "me lo puedo permitir" — pasive=True
-    # porque este endpoint lo pollean cada 2s, no puede forzar una consulta
-    # activa al EcoFlow (ver /api/cargas).
-    fits = _compute_device_fits(_gather_metrics(passive=True)) if ECOFLOW_READY else {}
-    return {
-        "devices": [
-            {
-                "key": key,
-                "label": info["label"],
-                "emoji": info["emoji"],
-                "watts": info["watts"],
-                "on": DEVICE_STATE[key],
-                "charged": DEVICE_CHARGED.get(key),
-                "fits": fits.get(key, {}).get("fits"),
-                "deficit_w": fits.get(key, {}).get("deficit_w", 0),
-            }
-            for key, info in DEVICE_INFO.items()
-        ]
-    }
 
 
 def _dashboard_battery_view(m: dict) -> dict:
@@ -1184,20 +875,6 @@ DASHBOARD_HTML = """<!doctype html>
   .lateral-remain { font-size: 10px; font-weight: 600; margin-top: 1px; font-variant-numeric: tabular-nums; }
   .usb-svg { flex-shrink: 0; color: #9aa4af; }
   .tower-svg { flex-shrink: 0; color: #9aa4af; }
-  .devices { width: 100%; max-width: 380px; margin-top: 10px; }
-  .devices .title { font-size: 13px; color: #9aa4af; margin-bottom: 6px; }
-  .device-btn {
-    display: flex; justify-content: space-between; align-items: center; width: 100%;
-    font-size: 14px; padding: 8px 12px; margin-bottom: 6px; border-radius: 10px;
-    background: #141b22; border: 1px solid #232b33; color: #cbd5e1; cursor: pointer;
-    transition: background-color 150ms var(--ease-out), border-color 150ms var(--ease-out);
-  }
-  .device-btn .name { display: flex; align-items: center; gap: 8px; }
-  .fit-dot { font-size: 11px; }
-  .device-btn .state { font-weight: 700; font-size: 12px; letter-spacing: 0.03em; }
-  .device-btn.on { border-color: #4ade8055; background: #1a2b1f; }
-  .device-btn.on .state { color: #4ade80; }
-  .device-btn.off .state { color: #6b7684; }
   .updated { margin-top: 14px; font-size: 12px; color: #7b8794; }
   .live-dot {
     display: inline-block; width: 6px; height: 6px; border-radius: 50%;
@@ -1437,10 +1114,6 @@ DASHBOARD_HTML = """<!doctype html>
     <div class="eta-goal" id="eta-goal"></div>
   </div>
 
-  <div class="devices">
-    <div class="title">Qué tienes encendido</div>
-    <div id="devices"></div>
-  </div>
   <script>
     // Umbrales de color del ring principal (rojo/amarillo/verde). Mismos
     // valores que RING_RED_MAX_PCT/RING_YELLOW_MAX_PCT en App.tsx (Expo) —
@@ -1649,36 +1322,9 @@ DASHBOARD_HTML = """<!doctype html>
       }
     }
 
-    // Panel de dispositivos: se refresca aparte (mucho menos seguido que el
-    // estado del EcoFlow) y solo vuelve a pedir datos cuando el usuario
-    // togglea algo, para no pisar un click en curso con un refresh automático.
-    async function loadDevices() {
-      try {
-        const res = await fetch('/api/devices');
-        const d = await res.json();
-        renderDevices(d.devices);
-      } catch (e) { /* silencioso, no es crítico como el estado del EcoFlow */ }
-    }
-
-    // dev.fits: mismo punto que "Gestión de cargas" (ver _compute_device_fits
-    // en el backend), pegado acá para no tener que mirar dos secciones
-    // separadas para saber "está prendido" y "me lo puedo permitir" a la vez.
-    function fitDot(dev) {
-      return dev.fits == null ? '' : `<span class="fit-dot" title="${dev.fits ? 'Entra en el excedente actual' : 'No entra en el excedente actual'}">${dev.fits ? '🟢' : '🔴'}</span>`;
-    }
-    function renderDevices(devices) {
-      document.getElementById('devices').innerHTML = devices.map(dev => `
-        <div class="device-btn off" data-key="${dev.key}">
-          <span class="name">${fitDot(dev)}${dev.emoji} ${dev.label} · ${dev.watts}W</span>
-        </div>
-      `).join('');
-    }
-
     refresh();
-    loadDevices();
     setInterval(refresh, 2000);
     setInterval(tickClock, 1000);
-    setInterval(loadDevices, 2000);
   </script>
 </body>
 </html>
@@ -1707,7 +1353,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self):
-        # Preflight de CORS para el POST de /api/devices (lleva Content-Type:
+        # Preflight de CORS para el POST de /api/alerta (lleva Content-Type:
         # application/json, así que el navegador manda OPTIONS antes).
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1731,16 +1377,13 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             except Exception as exc:
                 payload = json.dumps({"ready": False, "error": str(exc)}).encode("utf-8")
                 self._send(500, payload, "application/json")
-        elif path == "/api/devices":
-            payload = json.dumps(get_device_state_payload()).encode("utf-8")
-            self._send(200, payload, "application/json")
         elif path == "/api/cargas":
             try:
                 # passive=True (misma caché que /api/status) — sin esto, cada
                 # pedido forzaba una consulta activa al EcoFlow (lenta, unos
                 # segundos), que era el retraso que se veía en el dashboard/app
-                # antes de que apareciera la sección de gestión de cargas.
-                message = build_load_advisor_message(_gather_metrics(passive=True)) if ECOFLOW_READY else ""
+                # antes de que apareciera la sección del plan de batería.
+                message = build_battery_plan_message(_gather_metrics(passive=True)) if ECOFLOW_READY else ""
                 payload = json.dumps({"message": message}).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
@@ -1750,50 +1393,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
-        if self.path == "/api/devices":
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(length) or b"{}")
-                device = str(body.get("device", ""))
-                # el panel web manda la clave exacta (dev.key de /api/devices),
-                # no hace falta resolver alias como en los comandos de Telegram
-                if device not in DEVICE_INFO:
-                    self._send(400, b'{"error":"dispositivo desconocido"}', "application/json")
-                    return
-                DEVICE_STATE[device] = bool(body.get("on"))
-                shared_state._save_persisted_state()
-                payload = json.dumps(get_device_state_payload()).encode("utf-8")
-                self._send(200, payload, "application/json")
-            except Exception as exc:
-                payload = json.dumps({"error": str(exc)}).encode("utf-8")
-                self._send(500, payload, "application/json")
-        elif self.path == "/api/devices/charged":
-            # Mismo contrato que POST /api/devices, pero contra DEVICE_CHARGED
-            # en vez de DEVICE_STATE: body {"device": <key>, "charged": bool},
-            # 400 si el dispositivo no es válido (solo ventilador1-3,
-            # powerbank1-2), 200 con el mismo payload completo de
-            # get_device_state_payload() si se aplicó.
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(length) or b"{}")
-                device = str(body.get("device", ""))
-                if device not in DEVICE_CHARGED:
-                    self._send(400, b'{"error":"dispositivo desconocido"}', "application/json")
-                    return
-                charged = bool(body.get("charged"))
-                DEVICE_CHARGED[device] = charged
-                # Cargada implica que ya no está en uso: si estaba encendida
-                # se apaga sola, para que "Qué tienes encendido" no siga
-                # mostrándola prendida (mismo criterio que el comando /cargado).
-                if charged:
-                    DEVICE_STATE[device] = False
-                shared_state._save_persisted_state()
-                payload = json.dumps(get_device_state_payload()).encode("utf-8")
-                self._send(200, payload, "application/json")
-            except Exception as exc:
-                payload = json.dumps({"error": str(exc)}).encode("utf-8")
-                self._send(500, payload, "application/json")
-        elif self.path == "/api/alerta":
+        if self.path == "/api/alerta":
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length) or b"{}")
