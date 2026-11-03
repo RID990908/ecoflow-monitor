@@ -181,6 +181,9 @@ def ac_check_timer() -> None:
                 shared_state.OUTAGE_START_TIMESTAMP = None
             elif not is_charging and shared_state.WAS_CHARGING_AC:
                 shared_state.OUTAGE_START_TIMESTAMP = time.time()
+                if shared_state.AC_ORIGIN == "grid":
+                    # The street grid just dropped: the next AC is assumed to be the plant.
+                    shared_state.GRID_OUT = True
                 telegram_bot.send_telegram("🔌⚠️ Se fue la luz: la Delta 2 dejó de tener AC conectado.")
                 log.info("Notificado corte de luz (AC desconectado)")
 

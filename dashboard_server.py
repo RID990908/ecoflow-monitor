@@ -133,6 +133,22 @@ def _battery_remain(soc, net_w) -> dict | None:
     return {"charging": charging, "text": f"{h}h {m}m"}
 
 
+def _remain_from_net(soc, net_w, num_batteries) -> dict:
+    """Autonomía (descargando: hasta 0%) o tiempo a carga completa (cargando:
+    hasta 100%) del sistema, lineal con el neto actual. Mismo criterio que
+    _time_to_threshold_eta; net 0 -> estable."""
+    if net_w is None or net_w == 0:
+        return {"stable": True}
+    capacity_wh = BATTERY_CAPACITY_WH * num_batteries
+    charging_up = net_w > 0
+    target = 100 if charging_up else 0
+    hours = abs(capacity_wh * (target - soc) / 100 / net_w)
+    total_min = int(round(hours * 60))
+    h, m = divmod(total_min, 60)
+    eta = datetime.now(TZ) + timedelta(minutes=total_min)
+    return {"stable": False, "hours": h, "minutes": m, "charging_up": charging_up, "eta": eta.strftime("%H:%M")}
+
+
 def _time_to_threshold_eta(soc, net_w, num_batteries, threshold):
     """Datetime estimado (lineal, mismo criterio que pd.remainTime del propio
     dispositivo) en que la carga llega al umbral de batería baja configurado
@@ -274,8 +290,14 @@ def _gather_metrics(passive: bool = False) -> dict:
         avg_soc = None
 
     remain = None
-    is_stable = total_in_w == out_w
-    if is_stable:
+    # Totals use the same capacity and net power as the threshold line below
+    # (and as the per-battery times), so "Dura hasta" and "20% a las" always
+    # agree. The device's own pd.remainTime is only a fallback: it was seen
+    # disagreeing with the real net (10h02 reported vs 11h24 at 164 W).
+    if avg_soc is not None:
+        net_for_remain = system_net_w if soc_extra is not None else delta2_net_w
+        remain = _remain_from_net(avg_soc, net_for_remain, 2 if soc_extra is not None else 1)
+    elif total_in_w == out_w:
         remain = {"stable": True}
     elif remain_min:
         hours, minutes = divmod(abs(int(remain_min)), 60)
@@ -694,6 +716,10 @@ def get_dashboard_status() -> dict:
             f"{shared_state.BATTERY_LOW_THRESHOLD}% a las {m['threshold_eta'].strftime('%H:%M')}" if m["threshold_eta"] else None
         ),
         "threshold_pct": shared_state.BATTERY_LOW_THRESHOLD,
+        # Where the AC comes from, as marked by the user in the app. Detection
+        # never waits for it (has_ac is by voltage); this is only a label.
+        "ac_origin": shared_state.AC_ORIGIN,
+        "grid_out": shared_state.GRID_OUT,
         "last_ac_text": _last_ac_line().replace("⚡ ", ""),
         # Versión corta ("hace 3h 20m") para mostrar pegada al nodo AC del
         # diagrama. Con AC presente, cuánto hace que llegó (LAST_AC_TIMESTAMP);
@@ -1404,6 +1430,24 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
                 shared_state.BATTERY_LOW_THRESHOLD = pct
                 shared_state._save_persisted_state()
                 payload = json.dumps({"threshold_pct": shared_state.BATTERY_LOW_THRESHOLD}).encode("utf-8")
+                self._send(200, payload, "application/json")
+            except Exception as exc:
+                payload = json.dumps({"error": str(exc)}).encode("utf-8")
+                self._send(500, payload, "application/json")
+        elif self.path == "/api/ac-origin":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                origin = body.get("origin")
+                if origin not in ("unclassified", "grid", "plant"):
+                    self._send(400, b'{"error":"origin debe ser unclassified, grid o plant"}', "application/json")
+                    return
+                shared_state.AC_ORIGIN = origin
+                # Choosing the plant means the street grid is out; anything
+                # else clears that assumption.
+                shared_state.GRID_OUT = origin == "plant"
+                shared_state._save_persisted_state()
+                payload = json.dumps({"ac_origin": shared_state.AC_ORIGIN, "grid_out": shared_state.GRID_OUT}).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
                 payload = json.dumps({"error": str(exc)}).encode("utf-8")

@@ -6,7 +6,7 @@ las funciones que los leen/escriben están repartidas en varios módulos, este
 es el único lugar donde se definen para que todos apunten al mismo estado.
 
 IMPORTANTE para quien toque este archivo: los escalares que cambian en
-tiempo de ejecución (WAS_CHARGING_AC, BATTERY_LOW_THRESHOLD,
+tiempo de ejecución (WAS_CHARGING_AC, AC_ORIGIN, GRID_OUT, BATTERY_LOW_THRESHOLD,
 WAS_BELOW_LOW_THRESHOLD, WAS_FULL, LAST_AC_TIMESTAMP, OUTAGE_START_TIMESTAMP,
 _DATA_STALE_ALERTED, STALE_ACK_BY_USER) deben leerse/escribirse siempre como
 `shared_state.NOMBRE` (atributo del módulo) desde los demás archivos, NUNCA
@@ -119,6 +119,8 @@ def _save_persisted_state() -> None:
                     "outage_start_timestamp": OUTAGE_START_TIMESTAMP,
                     "data_stale_alerted": _DATA_STALE_ALERTED,
                     "stale_ack_by_user": STALE_ACK_BY_USER,
+                    "ac_origin": AC_ORIGIN,
+                    "grid_out": GRID_OUT,
                 },
                 f,
             )
@@ -140,3 +142,10 @@ LAST_AC_TIMESTAMP = _persisted.get("last_ac_timestamp")
 OUTAGE_START_TIMESTAMP = _persisted.get("outage_start_timestamp")
 _DATA_STALE_ALERTED = _persisted.get("data_stale_alerted", False)
 STALE_ACK_BY_USER = _persisted.get("stale_ack_by_user", False)
+# Origen de la CA marcado por el usuario desde la app: "unclassified" (aún no
+# dijo), "grid" (red de la calle) o "plant" (planta de gas). Es solo una
+# etiqueta: la detección de que hay AC es por voltaje y nunca espera esto.
+# GRID_OUT: la red de la calle se cortó, así que la próxima CA que llegue se
+# asume de la planta hasta que el usuario diga que volvió la red.
+AC_ORIGIN = _persisted.get("ac_origin", "unclassified")
+GRID_OUT = _persisted.get("grid_out", False)
