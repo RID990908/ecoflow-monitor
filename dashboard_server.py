@@ -16,7 +16,8 @@ import http.server
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from urllib.parse import parse_qs
+from datetime import datetime, timedelta, timezone
 
 import mqtt_client
 import shared_state
@@ -146,7 +147,7 @@ def _remain_from_net(soc, net_w, num_batteries) -> dict:
     total_min = int(round(hours * 60))
     h, m = divmod(total_min, 60)
     eta = datetime.now(TZ) + timedelta(minutes=total_min)
-    return {"stable": False, "hours": h, "minutes": m, "charging_up": charging_up, "eta": eta.strftime("%H:%M")}
+    return {"stable": False, "hours": h, "minutes": m, "charging_up": charging_up, "eta": eta.strftime("%H:%M"), "eta_ts": eta.timestamp()}
 
 
 def _time_to_threshold_eta(soc, net_w, num_batteries, threshold):
@@ -314,6 +315,7 @@ def _gather_metrics(passive: bool = False) -> dict:
             "minutes": minutes,
             "charging_up": charging_up,
             "eta": eta.strftime("%H:%M"),
+            "eta_ts": eta.timestamp(),
         }
 
     if soc_extra is not None:
@@ -628,6 +630,7 @@ def _dashboard_battery_view(m: dict) -> dict:
 
     eta_text = None
     eta_ok = None
+    eta_ts = None
     remain_duration = None
     is_stable = bool(m["remain"] and m["remain"]["stable"])
     if is_stable:
@@ -635,6 +638,7 @@ def _dashboard_battery_view(m: dict) -> dict:
     elif m["remain"]:
         r = m["remain"]
         eta_ok = r["charging_up"]
+        eta_ts = r["eta_ts"]
         eta_text = f"Llena a las {r['eta']}" if eta_ok else f"Dura hasta las {r['eta']}"
         remain_duration = f"{r['hours']}h {r['minutes']}m"
 
@@ -644,6 +648,7 @@ def _dashboard_battery_view(m: dict) -> dict:
         "extra_remain": extra_remain,
         "eta_text": eta_text,
         "eta_ok": eta_ok,
+        "eta_ts": eta_ts,
         "remain_duration": remain_duration,
     }
 
@@ -676,7 +681,17 @@ def _dashboard_staleness_view() -> dict:
     return {"stale": is_stale, "stale_minutes": stale_minutes}
 
 
-def get_dashboard_status() -> dict:
+def _client_now(utc_offset_min):
+    """Hora del cliente: la app manda el offset UTC de su móvil (minutos al
+    este de UTC) para que el plan y el reloj sigan la hora real del usuario
+    aunque la base de zonas del servidor no coincida (ej. Cuba sin cambio de
+    horario). Sin offset válido, cae a TZ."""
+    if utc_offset_min is None or not -14 * 60 <= utc_offset_min <= 14 * 60:
+        return datetime.now(TZ)
+    return datetime.now(timezone(timedelta(minutes=utc_offset_min)))
+
+
+def get_dashboard_status(utc_offset_min=None) -> dict:
     if not ECOFLOW_READY:
         return {"ready": False, "error": "EcoFlow todavía no está configurado"}
     try:
@@ -684,7 +699,7 @@ def get_dashboard_status() -> dict:
     except Exception as exc:
         return {"ready": False, "error": str(exc)}
 
-    now = datetime.now(TZ)
+    now = _client_now(utc_offset_min)
     battery_view = _dashboard_battery_view(m)
     goal_view = _dashboard_goal_view(m, now)
     staleness_view = _dashboard_staleness_view()
@@ -706,6 +721,7 @@ def get_dashboard_status() -> dict:
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],
         "eta_text": battery_view["eta_text"],
+        "eta_ts": battery_view["eta_ts"],
         "eta_ok": battery_view["eta_ok"],
         "remain_duration": battery_view["remain_duration"],
         "threshold_text": m["threshold_line"].replace("🪫 ", "") if m["threshold_line"] else None,
@@ -715,6 +731,7 @@ def get_dashboard_status() -> dict:
         "threshold_short": (
             f"{shared_state.BATTERY_LOW_THRESHOLD}% a las {m['threshold_eta'].strftime('%H:%M')}" if m["threshold_eta"] else None
         ),
+        "threshold_ts": m["threshold_eta"].timestamp() if m["threshold_eta"] else None,
         "threshold_pct": shared_state.BATTERY_LOW_THRESHOLD,
         # Where the AC comes from, as marked by the user in the app. Detection
         # never waits for it (has_ac is by voltage); this is only a label.
@@ -741,7 +758,8 @@ def get_dashboard_status() -> dict:
         "usb_out_w": m["usb_out_w"] or 0,
         "delta2_charge_w": m["delta2_charge_w"] or 0,
         "delta2_discharge_w": m["delta2_discharge_w"] or 0,
-        "updated_at": datetime.now(TZ).strftime("%H:%M:%S"),
+        "updated_at": now.strftime("%H:%M:%S"),
+        "updated_ts": now.timestamp(),
         "stale": staleness_view["stale"],
         "stale_minutes": staleness_view["stale_minutes"],
         "goal_label": goal_view["goal_label"],
@@ -1357,6 +1375,15 @@ DASHBOARD_HTML = """<!doctype html>
 """
 
 
+def _parse_utc_offset(query: str):
+    """tz_offset_min=<int> de la query string (minutos al este de UTC), o None."""
+    value = parse_qs(query).get("tz_offset_min", [None])[0]
+    try:
+        return int(value) if value is not None else None
+    except ValueError:
+        return None
+
+
 class _DashboardHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # ya logueamos lo importante aparte; esto evita ruido por cada poll
@@ -1393,12 +1420,12 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
         # para evitar el caché del lado del cliente (ver set_dashboard_menu_button)
         # — hay que cortar la query string antes de comparar la ruta, si no
         # cualquier pedido con "?" cae siempre al 404 de abajo.
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         if path in ("/", "/index.html"):
             self._send(200, DASHBOARD_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/status":
             try:
-                payload = json.dumps(get_dashboard_status()).encode("utf-8")
+                payload = json.dumps(get_dashboard_status(_parse_utc_offset(query))).encode("utf-8")
                 self._send(200, payload, "application/json")
             except Exception as exc:
                 payload = json.dumps({"ready": False, "error": str(exc)}).encode("utf-8")
