@@ -76,6 +76,14 @@ QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
 QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "7"))
 QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
 
+# Plan de la planta eléctrica (plant_plan del dashboard): potencia con la que
+# carga (W, valor de ejemplo), hora local desde la que se calcula el plan y
+# horas silenciosas en las que la planta nunca corre (22:00-07:00).
+PLANT_POWER_W = float(os.environ.get("PLANT_POWER_W", "900"))
+PLANT_PLAN_FROM_HOUR = 17
+PLANT_QUIET_START_HOUR = 22
+PLANT_QUIET_END_HOUR = 7
+
 # Modo "private API": en vez de las developer keys (bloqueadas por IP en
 # Railway y sin permiso de dispositivo todavía), inicia sesión con el email y
 # contraseña normales de la cuenta EcoFlow y habla por MQTT — el mismo canal
