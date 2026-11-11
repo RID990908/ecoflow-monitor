@@ -692,14 +692,14 @@ def _client_now(utc_offset_min):
     return datetime.now(timezone(timedelta(minutes=utc_offset_min)))
 
 
-def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, plant_w):
+def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, charge_w):
     """Plan nocturno de la planta: cuándo encenderla y cuántos minutos para
     llegar a las 08:00 (cuando la planta vuelve a poder usarse) con la reserva,
     sin correr después de las 22:00. Devuelve
     el dict de `plant_plan` o None (sin dato, con AC, antes de las 08:00 o en
     horas silenciosas). La hora de inicio se ancla a las 22:00 (no depende de
     `now`) para que no salte con cada lectura."""
-    if has_ac or soc_pct is None or out_w is None or out_w < 1 or plant_w <= out_w:
+    if has_ac or soc_pct is None or out_w is None or out_w < 1 or charge_w <= out_w:
         return None
     if now_local.hour < shared_state.PLANT_PLAN_FROM_HOUR:
         return None
@@ -714,7 +714,7 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, pla
         plan["kind"] = "not_needed"
         plan["end_pct"] = round(max(0.0, soc_pct - out_w * hours_to_dawn / capacity_wh * 100), 1)
         return plan
-    minutes = max(5, math.ceil(need_wh / plant_w * 60 / 5) * 5)
+    minutes = max(5, math.ceil(need_wh / charge_w * 60 / 5) * 5)
     start = quiet - timedelta(minutes=max(60, minutes))
     # If the battery would hit the reserve before that anchored start, the
     # plant has to run sooner: from now on.
@@ -724,7 +724,7 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, pla
     # the plant needs to fill it from what is left when it starts.
     wait_h = max(0.0, (start - now_local).total_seconds() / 3600)
     soc_start = max(0.0, soc_pct - out_w * wait_h / capacity_wh * 100)
-    fill_min = (100 - soc_start) / ((plant_w - out_w) / capacity_wh * 100) * 60
+    fill_min = (100 - soc_start) / ((charge_w - out_w) / capacity_wh * 100) * 60
     minutes = min(minutes, max(5, math.ceil(fill_min / 5) * 5))
     if now_local < start:
         plan["kind"] = "plan"
@@ -738,7 +738,7 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, pla
     plan["minutes"] = minutes
     # Battery % when the plant stops: what is left when it starts (the load
     # keeps draining until then) plus the net gain while it runs.
-    gain = minutes / 60 * (plant_w - out_w) / capacity_wh * 100
+    gain = minutes / 60 * (charge_w - out_w) / capacity_wh * 100
     drain = out_w * wait_h / capacity_wh * 100
     plan["target_pct"] = round(max(0.0, min(100.0, soc_pct - drain + gain)), 1)
     return plan
@@ -778,7 +778,7 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
             m["has_ac"],
             BATTERY_CAPACITY_WH * 2,
             shared_state.BATTERY_LOW_THRESHOLD,
-            shared_state.PLANT_POWER_W,
+            shared_state.AC_CHARGE_W,
         ),
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],

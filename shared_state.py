@@ -76,11 +76,11 @@ QUIET_START_MINUTE = int(os.environ.get("QUIET_START_MINUTE", "30"))
 QUIET_END_HOUR = int(os.environ.get("QUIET_END_HOUR", "7"))
 QUIET_END_MINUTE = int(os.environ.get("QUIET_END_MINUTE", "0"))
 
-# Plan de la planta eléctrica (plant_plan del dashboard): potencia con la que
-# carga (W, valor de ejemplo), hora local desde la que se calcula el plan y
+# Plan de la planta eléctrica (plant_plan del dashboard): velocidad de carga
+# por AC de la EcoFlow (W; la planta entrega lo que la EcoFlow le pide), hora local desde la que se calcula el plan y
 # horas silenciosas en las que la planta nunca corre (22:00-08:00; solo se
 # puede usar de 08:00 a 22:00).
-PLANT_POWER_W = float(os.environ.get("PLANT_POWER_W", "900"))
+AC_CHARGE_W = float(os.environ.get("AC_CHARGE_W", "1200"))
 PLANT_PLAN_FROM_HOUR = 8
 PLANT_QUIET_START_HOUR = 22
 PLANT_QUIET_END_HOUR = 8
