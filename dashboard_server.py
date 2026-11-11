@@ -708,14 +708,20 @@ def _learn_ac_charge_w(has_ac, ac_w) -> float:
     return shared_state.LEARNED_AC_CHARGE_W or shared_state.AC_CHARGE_W
 
 
-def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, charge_w):
+def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, charge_w, ac_origin="unclassified"):
     """Plan nocturno de la planta: cuándo encenderla y cuántos minutos para
     llegar a las 08:00 (cuando la planta vuelve a poder usarse) con la reserva,
-    sin correr después de las 22:00. Devuelve
-    el dict de `plant_plan` o None (sin dato, con AC, antes de las 08:00 o en
-    horas silenciosas). La hora de inicio se ancla a las 22:00 (no depende de
-    `now`) para que no salte con cada lectura."""
-    if has_ac or soc_pct is None or out_w is None or out_w < 1 or charge_w <= out_w:
+    sin correr después de las 22:00. Devuelve el dict de `plant_plan` o None
+    (sin dato, con AC de la calle, antes de las 08:00 o en horas silenciosas).
+    La hora de inicio se ancla a las 22:00 (no depende de `now`) para que no
+    salte con cada lectura. `target_pct` es el % que la batería necesita tener
+    ahora para llegar a las 08:00 con la reserva si la planta se apagara ya
+    (None si pasa del 100%). Con AC de la planta (`ac_origin == "plant"`) el
+    plan sigue vivo mientras carga."""
+    if soc_pct is None or out_w is None or out_w < 1 or charge_w <= out_w:
+        return None
+    running = bool(has_ac) and ac_origin == "plant"
+    if has_ac and not running:
         return None
     if now_local.hour < shared_state.PLANT_PLAN_FROM_HOUR:
         return None
@@ -724,8 +730,16 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, cha
     quiet = now_local.replace(hour=shared_state.PLANT_QUIET_START_HOUR, minute=0, second=0, microsecond=0)
     dawn = (now_local + timedelta(days=1)).replace(hour=shared_state.PLANT_QUIET_END_HOUR, minute=0, second=0, microsecond=0)
     hours_to_dawn = (dawn - now_local).total_seconds() / 3600
-    need_wh = out_w * hours_to_dawn - (soc_pct - reserve_pct) / 100 * capacity_wh
-    plan = {"kind": None, "start_ts": None, "minutes": None, "target_pct": None, "end_pct": None}
+    plan = {"kind": None, "start_ts": None, "minutes": None, "target_pct": None, "end_pct": None, "until_ts": None}
+    # Not even a full battery at 22:00 lasts the whole quiet period: say until when.
+    quiet_h = (dawn - quiet).total_seconds() / 3600
+    if reserve_pct + out_w * quiet_h / capacity_wh * 100 > 100:
+        plan["kind"] = "short"
+        lasts_h = (100 - reserve_pct) / 100 * capacity_wh / out_w
+        plan["until_ts"] = (quiet + timedelta(hours=lasts_h)).timestamp()
+        return plan
+    required_pct = reserve_pct + out_w * hours_to_dawn / capacity_wh * 100
+    need_wh = (required_pct - soc_pct) / 100 * capacity_wh
     if need_wh <= 0:
         plan["kind"] = "not_needed"
         plan["end_pct"] = round(max(0.0, soc_pct - out_w * hours_to_dawn / capacity_wh * 100), 1)
@@ -736,12 +750,8 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, cha
     # plant has to run sooner: from now on.
     runway_h = max(0.0, soc_pct - reserve_pct) / 100 * capacity_wh / out_w
     start = min(start, now_local + timedelta(hours=runway_h))
-    # The battery cannot take more than a full charge: cap the run at the time
-    # the plant needs to fill it from what is left when it starts.
-    wait_h = max(0.0, (start - now_local).total_seconds() / 3600)
-    soc_start = max(0.0, soc_pct - out_w * wait_h / capacity_wh * 100)
-    fill_min = (100 - soc_start) / ((charge_w - out_w) / capacity_wh * 100) * 60
-    minutes = min(minutes, max(5, math.ceil(fill_min / 5) * 5))
+    if running:
+        start = now_local
     if now_local < start:
         plan["kind"] = "plan"
         plan["start_ts"] = start.timestamp()
@@ -752,11 +762,7 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, cha
             return plan
         plan["kind"] = "urgent" if slack_min < 15 else "now"
     plan["minutes"] = minutes
-    # Battery % when the plant stops: what is left when it starts (the load
-    # keeps draining until then) plus the net gain while it runs.
-    gain = minutes / 60 * (charge_w - out_w) / capacity_wh * 100
-    drain = out_w * wait_h / capacity_wh * 100
-    plan["target_pct"] = round(max(0.0, min(100.0, soc_pct - drain + gain)), 1)
+    plan["target_pct"] = round(required_pct, 1) if required_pct <= 100 else None
     return plan
 
 
@@ -797,6 +803,7 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
             BATTERY_CAPACITY_WH * 2,
             shared_state.BATTERY_LOW_THRESHOLD,
             charge_w,
+            shared_state.AC_ORIGIN,
         ),
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],
