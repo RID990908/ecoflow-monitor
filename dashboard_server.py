@@ -737,6 +737,7 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, cha
         plan["kind"] = "short"
         lasts_h = (100 - reserve_pct) / 100 * capacity_wh / out_w
         plan["until_ts"] = (quiet + timedelta(hours=lasts_h)).timestamp()
+        plan["target_pct"] = 100.0  # the most the battery can hold
         return plan
     required_pct = reserve_pct + out_w * hours_to_dawn / capacity_wh * 100
     need_wh = (required_pct - soc_pct) / 100 * capacity_wh
