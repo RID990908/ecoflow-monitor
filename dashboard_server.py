@@ -708,18 +708,69 @@ def _learn_ac_charge_w(has_ac, ac_w) -> float:
     return shared_state.LEARNED_AC_CHARGE_W or shared_state.AC_CHARGE_W
 
 
-def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, charge_w, ac_origin="unclassified"):
+LOAD_EMA_CAP = 3000
+LOAD_SAVE_INTERVAL_S = 600
+LOAD_MIN_SAMPLES = 30
+LOAD_MIN_NIGHT_HOURS = 4
+_last_load_save = 0.0
+
+
+def _record_load(load_by_hour, hour, out_w) -> None:
+    """Actualiza el bucket de la hora con una media móvil exponencial
+    (avg += (w - avg) / min(n + 1, 3000)). Ignora out_w None."""
+    if out_w is None:
+        return
+    key = str(int(hour))
+    b = load_by_hour.get(key)
+    if not b:
+        b = {"avg": float(out_w), "n": 0}
+        load_by_hour[key] = b
+    n = min(int(b.get("n", 0)) + 1, LOAD_EMA_CAP)
+    b["avg"] = float(b.get("avg", 0.0)) + (float(out_w) - float(b.get("avg", 0.0))) / n
+    b["n"] = n
+
+
+def _maybe_save_load(now_ts=None) -> bool:
+    """Guarda en disco como mucho una vez cada 10 minutos."""
+    global _last_load_save
+    now_ts = time.time() if now_ts is None else now_ts
+    if now_ts - _last_load_save < LOAD_SAVE_INTERVAL_S:
+        return False
+    _last_load_save = now_ts
+    shared_state._save_persisted_state()
+    return True
+
+
+def _expected_night_load_w(load_by_hour, current_out_w):
+    """Consumo medio esperado en la noche silenciosa (22:00 a 08:00): media de
+    `avg` de las horas con n >= 30; con menos de 4 horas aprendidas cae a la
+    salida actual. Mínimo 1 W."""
+    start, end = shared_state.PLANT_QUIET_START_HOUR, shared_state.PLANT_QUIET_END_HOUR
+    hours = list(range(start, 24)) + list(range(0, end))
+    avgs = []
+    for h in hours:
+        b = load_by_hour.get(str(h))
+        if b and int(b.get("n", 0)) >= LOAD_MIN_SAMPLES:
+            avgs.append(float(b["avg"]))
+    if len(avgs) < LOAD_MIN_NIGHT_HOURS:
+        return current_out_w
+    return max(1.0, sum(avgs) / len(avgs))
+
+
+def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, charge_w, ac_origin="unclassified", night_load_w=None):
     """Plan nocturno de la planta: cuándo encenderla y cuántos minutos para
     llegar a las 08:00 (cuando la planta vuelve a poder usarse) con la reserva,
     sin correr después de las 22:00. Devuelve el dict de `plant_plan` o None
     (sin dato, con AC de la calle, antes de las 08:00 o en horas silenciosas).
     La hora de inicio se ancla a las 22:00 (no depende de `now`) para que no
-    salte con cada lectura. `target_pct` es el % que la batería necesita tener
-    ahora para llegar a las 08:00 con la reserva si la planta se apagara ya
-    (None si pasa del 100%). Con AC de la planta (`ac_origin == "plant"`) el
+    salte con cada lectura. `target_pct` es un umbral fijo: el % con el que
+    se llega a las 08:00 con la reserva si se tiene al empezar el silencio
+    (22:00), con el consumo nocturno esperado; None cuando ni una batería
+    llena alcanza (`short`). Con AC de la planta (`ac_origin == "plant"`) el
     plan sigue vivo mientras carga."""
     if soc_pct is None or out_w is None or out_w < 1 or charge_w <= out_w:
         return None
+    load_w = max(1.0, night_load_w) if night_load_w is not None else out_w
     running = bool(has_ac) and ac_origin == "plant"
     if has_ac and not running:
         return None
@@ -733,23 +784,24 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, cha
     plan = {"kind": None, "start_ts": None, "minutes": None, "target_pct": None, "end_pct": None, "until_ts": None}
     # Not even a full battery at 22:00 lasts the whole quiet period: say until when.
     quiet_h = (dawn - quiet).total_seconds() / 3600
-    if reserve_pct + out_w * quiet_h / capacity_wh * 100 > 100:
+    if reserve_pct + load_w * quiet_h / capacity_wh * 100 > 100:
         plan["kind"] = "short"
-        lasts_h = (100 - reserve_pct) / 100 * capacity_wh / out_w
+        lasts_h = (100 - reserve_pct) / 100 * capacity_wh / load_w
         plan["until_ts"] = (quiet + timedelta(hours=lasts_h)).timestamp()
-        plan["target_pct"] = 100.0  # the most the battery can hold
         return plan
-    required_pct = reserve_pct + out_w * hours_to_dawn / capacity_wh * 100
+    # Fixed threshold: % that is enough to reach dawn if it is there at 22:00.
+    plan["target_pct"] = round(reserve_pct + load_w * quiet_h / capacity_wh * 100, 1)
+    required_pct = reserve_pct + load_w * hours_to_dawn / capacity_wh * 100
     need_wh = (required_pct - soc_pct) / 100 * capacity_wh
     if need_wh <= 0:
         plan["kind"] = "not_needed"
-        plan["end_pct"] = round(max(0.0, soc_pct - out_w * hours_to_dawn / capacity_wh * 100), 1)
+        plan["end_pct"] = round(max(0.0, soc_pct - load_w * hours_to_dawn / capacity_wh * 100), 1)
         return plan
     minutes = max(5, math.ceil(need_wh / charge_w * 60 / 5) * 5)
     start = quiet - timedelta(minutes=max(60, minutes))
     # If the battery would hit the reserve before that anchored start, the
     # plant has to run sooner: from now on.
-    runway_h = max(0.0, soc_pct - reserve_pct) / 100 * capacity_wh / out_w
+    runway_h = max(0.0, soc_pct - reserve_pct) / 100 * capacity_wh / load_w
     start = min(start, now_local + timedelta(hours=runway_h))
     if running:
         start = now_local
@@ -763,7 +815,6 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, cha
             return plan
         plan["kind"] = "urgent" if slack_min < 15 else "now"
     plan["minutes"] = minutes
-    plan["target_pct"] = round(required_pct, 1) if required_pct <= 100 else None
     return plan
 
 
@@ -781,6 +832,7 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
     staleness_view = _dashboard_staleness_view()
 
     charge_w = _learn_ac_charge_w(m["has_ac"], m["ac_w"])
+    night_load_w = _expected_night_load_w(shared_state.LOAD_BY_HOUR, m["out_w"])
 
     return {
         "ready": True,
@@ -805,6 +857,7 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
             shared_state.BATTERY_LOW_THRESHOLD,
             charge_w,
             shared_state.AC_ORIGIN,
+            night_load_w,
         ),
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],

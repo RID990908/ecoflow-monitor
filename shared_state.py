@@ -131,6 +131,7 @@ def _save_persisted_state() -> None:
                     "ac_origin": AC_ORIGIN,
                     "grid_out": GRID_OUT,
                     "learned_ac_charge_w": LEARNED_AC_CHARGE_W,
+                    "load_by_hour": LOAD_BY_HOUR,
                 },
                 f,
             )
@@ -163,3 +164,7 @@ GRID_OUT = _persisted.get("grid_out", False)
 # entraron por AC mientras corría la planta (None hasta que se mida). Si existe,
 # el plan de la planta la usa en vez de AC_CHARGE_W.
 LEARNED_AC_CHARGE_W = _persisted.get("learned_ac_charge_w")
+# Consumo aprendido por hora local del día ("0".."23" -> {"avg": W, "n": muestras}),
+# media móvil exponencial alimentada en segundo plano (ver load_sampler_timer).
+# El plan de la planta lo usa para estimar el consumo real de la noche.
+LOAD_BY_HOUR = _persisted.get("load_by_hour") or {}

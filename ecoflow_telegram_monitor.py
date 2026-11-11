@@ -118,6 +118,21 @@ def quiet_hours_timer() -> None:
             log.exception("Error en el aviso de horario silencioso")
 
 
+def load_sampler_timer() -> None:
+    """Aprende el consumo real por hora del día: cada minuto registra la
+    salida actual en el bucket de la hora local (para el plan de la planta)."""
+    while True:
+        time.sleep(60)
+        if not shared_state.ECOFLOW_READY:
+            continue
+        try:
+            m = dashboard_server._gather_metrics(passive=True)
+            dashboard_server._record_load(shared_state.LOAD_BY_HOUR, datetime.now(shared_state.TZ).hour, m["out_w"])
+            dashboard_server._maybe_save_load()
+        except Exception:
+            log.exception("Error en el muestreo de consumo por hora")
+
+
 WEEKLY_CLEANUP_WEEKDAY = int(os.environ.get("WEEKLY_CLEANUP_WEEKDAY", "6"))  # 0=lunes … 6=domingo
 WEEKLY_CLEANUP_HOUR = int(os.environ.get("WEEKLY_CLEANUP_HOUR", "4"))
 _last_cleanup_week = None
@@ -336,6 +351,7 @@ def main() -> None:
     threading.Thread(target=ac_check_timer, daemon=True).start()
     threading.Thread(target=watchdog_timer, daemon=True).start()
     threading.Thread(target=quiet_hours_timer, daemon=True).start()
+    threading.Thread(target=load_sampler_timer, daemon=True).start()
     threading.Thread(target=weekly_cleanup_timer, daemon=True).start()
     threading.Thread(target=dashboard_server.run_dashboard_server, daemon=True).start()
     if shared_state.USE_PRIVATE_API:
