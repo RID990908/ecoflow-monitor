@@ -694,8 +694,9 @@ def _client_now(utc_offset_min):
 
 def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, plant_w):
     """Plan nocturno de la planta: cuándo encenderla y cuántos minutos para
-    llegar a las 07:00 con la reserva, sin correr después de las 22:00. Devuelve
-    el dict de `plant_plan` o None (sin dato, con AC, antes de las 17:00 o en
+    llegar a las 08:00 (cuando la planta vuelve a poder usarse) con la reserva,
+    sin correr después de las 22:00. Devuelve
+    el dict de `plant_plan` o None (sin dato, con AC, antes de las 08:00 o en
     horas silenciosas). La hora de inicio se ancla a las 22:00 (no depende de
     `now`) para que no salte con cada lectura."""
     if has_ac or soc_pct is None or out_w is None or out_w < 1 or plant_w <= 0:
