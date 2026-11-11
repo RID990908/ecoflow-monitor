@@ -130,6 +130,7 @@ def _save_persisted_state() -> None:
                     "stale_ack_by_user": STALE_ACK_BY_USER,
                     "ac_origin": AC_ORIGIN,
                     "grid_out": GRID_OUT,
+                    "learned_ac_charge_w": LEARNED_AC_CHARGE_W,
                 },
                 f,
             )
@@ -158,3 +159,7 @@ STALE_ACK_BY_USER = _persisted.get("stale_ack_by_user", False)
 # asume de la planta hasta que el usuario diga que volvió la red.
 AC_ORIGIN = _persisted.get("ac_origin", "unclassified")
 GRID_OUT = _persisted.get("grid_out", False)
+# Velocidad de carga por AC de la EcoFlow aprendida: el pico de vatios que
+# entraron por AC mientras corría la planta (None hasta que se mida). Si existe,
+# el plan de la planta la usa en vez de AC_CHARGE_W.
+LEARNED_AC_CHARGE_W = _persisted.get("learned_ac_charge_w")

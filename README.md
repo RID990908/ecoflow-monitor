@@ -100,7 +100,7 @@ Como alternativa se usa la misma API que usa la app móvil de EcoFlow ("Private 
 | `TZ_NAME` | Zona horaria para horas mostradas (default: `America/Havana`) |
 | `QUIET_START_HOUR` / `QUIET_START_MINUTE` | Inicio del horario silencioso (default: 23:30) |
 | `QUIET_END_HOUR` / `QUIET_END_MINUTE` | Fin del horario silencioso (default: 07:00) |
-| `AC_CHARGE_W` | Velocidad de carga por AC de la EcoFlow en W (la planta entrega lo que la EcoFlow le pide), para el `plant_plan` del dashboard (default: 1200) |
+| `AC_CHARGE_W` | Velocidad de carga por AC de la EcoFlow en W (la planta entrega lo que la EcoFlow le pide), para el `plant_plan` del dashboard (default: 1200). Mientras corre la planta el backend mide el pico de vatios que entran por CA y, una vez medido, usa ese valor en vez de este |
 | `WEEKLY_CLEANUP_WEEKDAY` / `WEEKLY_CLEANUP_HOUR` | Día/hora de la limpieza semanal (default: domingo 4 AM) |
 | `DASHBOARD_URL` | URL pública del dashboard (para el botón "📊 Panel" en Telegram) |
 | `PORT` | Puerto del servidor del dashboard (lo define Railway automáticamente) |

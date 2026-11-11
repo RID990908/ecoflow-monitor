@@ -692,6 +692,22 @@ def _client_now(utc_offset_min):
     return datetime.now(timezone(timedelta(minutes=utc_offset_min)))
 
 
+def _learn_ac_charge_w(has_ac, ac_w) -> float:
+    """Velocidad de carga por AC a usar en el plan: el pico de vatios medido
+    mientras entraba AC que no es de la calle (la planta), o `AC_CHARGE_W` si
+    aún no hay medición. Ignora lecturas bajas (arranque o ruido)."""
+    if (
+        has_ac
+        and shared_state.AC_ORIGIN != "grid"
+        and ac_w is not None
+        and ac_w >= 300
+        and ac_w > (shared_state.LEARNED_AC_CHARGE_W or 0)
+    ):
+        shared_state.LEARNED_AC_CHARGE_W = round(ac_w / 10) * 10
+        shared_state._save_persisted_state()
+    return shared_state.LEARNED_AC_CHARGE_W or shared_state.AC_CHARGE_W
+
+
 def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, charge_w):
     """Plan nocturno de la planta: cuándo encenderla y cuántos minutos para
     llegar a las 08:00 (cuando la planta vuelve a poder usarse) con la reserva,
@@ -757,6 +773,8 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
     goal_view = _dashboard_goal_view(m, now)
     staleness_view = _dashboard_staleness_view()
 
+    charge_w = _learn_ac_charge_w(m["has_ac"], m["ac_w"])
+
     return {
         "ready": True,
         "percent": battery_view["percent"],
@@ -778,7 +796,7 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
             m["has_ac"],
             BATTERY_CAPACITY_WH * 2,
             shared_state.BATTERY_LOW_THRESHOLD,
-            shared_state.AC_CHARGE_W,
+            charge_w,
         ),
         "in_w": m["total_in_w"],
         "out_w": m["out_w"],
