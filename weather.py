@@ -9,7 +9,7 @@ Si la red falla se conserva el último valor bueno y se reintenta con espera
 Variables de entorno (todas opcionales):
   WEATHER_ENABLED      "false" apaga todo (sky=null, cero llamadas de red)
   WEATHER_LAT/LON      coordenadas (por defecto La Habana)
-  WEATHER_REFRESH_MIN  minutos entre consultas (por defecto 15)
+  WEATHER_REFRESH_SEC  segundos entre consultas (por defecto 10, mínimo 5)
 La zona horaria es la de siempre (`TZ_NAME`, ver shared_state).
 """
 
@@ -25,7 +25,7 @@ from shared_state import TZ, log
 ENABLED = os.environ.get("WEATHER_ENABLED", "true").strip().lower() != "false"
 LAT = float(os.environ.get("WEATHER_LAT", "23.1"))
 LON = float(os.environ.get("WEATHER_LON", "-82.37"))
-REFRESH_SECONDS = max(1.0, float(os.environ.get("WEATHER_REFRESH_MIN", "15"))) * 60
+REFRESH_SECONDS = max(5.0, float(os.environ.get("WEATHER_REFRESH_SEC", "10")))
 RETRY_SECONDS = 120.0
 API_URL = "https://api.open-meteo.com/v1/forecast"
 

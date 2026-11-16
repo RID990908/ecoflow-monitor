@@ -9,6 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # shared_state exige estas variables al importarse; valores de mentira para las pruebas.
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test")
 os.environ.setdefault("TELEGRAM_CHAT_ID", "0")
+os.environ.pop("WEATHER_REFRESH_SEC", None)
+os.environ.pop("WEATHER_REFRESH_MIN", None)
 
 import weather  # noqa: E402
 
@@ -28,6 +30,9 @@ def _reset():
 
 
 class ParseTests(unittest.TestCase):
+    def test_weather_refresh_default_is_ten_seconds(self):
+        self.assertEqual(weather.REFRESH_SECONDS, 10)
+
     def test_maps_cloud_code_day_and_sun_times_to_timestamps(self):
         sky = weather.parse_open_meteo(SAMPLE, HAVANA)
         self.assertEqual(sky["cloud_pct"], 3)
