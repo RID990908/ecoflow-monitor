@@ -1,0 +1,37 @@
+{
+  "arrangement": "free",
+  "positions": {
+    "01-liquid-battery.html": {
+      "x": 0,
+      "y": 22
+    },
+    "05-night-timeline.html": {
+      "x": 453,
+      "y": 17
+    },
+    "06-ambient-night.html": {
+      "x": 897,
+      "y": 7
+    },
+    "07-zoned-ring.html": {
+      "x": 1397,
+      "y": 0
+    },
+    "08-soft-relief.html": {
+      "x": 3290,
+      "y": 22
+    },
+    "09-crt-terminal.html": {
+      "x": 3760,
+      "y": 22
+    },
+    "10-full-bleed-battery.html": {
+      "x": 4230,
+      "y": 22
+    },
+    "11-neobrutalism.html": {
+      "x": 4700,
+      "y": 22
+    }
+  }
+}

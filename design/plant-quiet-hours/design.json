@@ -1,0 +1,34 @@
+{
+  "title": "Planta y silencio de vecinos",
+  "brief": "Cómo sugerir la planta en el diagrama actual de la app EcoFlow sin cambiar su diseño: después de las 21:00 no se usa por los vecinos y se debe llegar a las 07:00 con al menos 15%.",
+  "artboards": [
+    {
+      "file": "01-pn-1.html",
+      "title": "1 · De día, falta mucho: «Ahora» en amarillo",
+      "tradeoff": "Más de una hora para las 22:00: sin minutos, color amarillo.",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "02-pn-2.html",
+      "title": "2 · Todavía más de una hora: «Ahora» en amarillo",
+      "tradeoff": "A las 20:30 faltan 90 min: sigue amarillo y sin minutos.",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "03-pn-3.html",
+      "title": "3 · Menos de una hora: «Ahora · 35 min» en rojo",
+      "tradeoff": "A las 21:05 faltan 55 min: aparecen los minutos y pasa a rojo.",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "04-pn-4.html",
+      "title": "4 · No hace falta: «Sin planta · 17%»",
+      "tradeoff": "Batería por encima de la meta: no pide nada.",
+      "width": 390,
+      "height": 844
+    }
+  ]
+}

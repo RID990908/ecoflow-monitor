@@ -1,0 +1,34 @@
+{
+  "title": "5 cambios estéticos para la app",
+  "brief": "Cinco mejoras estéticas aplicadas a la pantalla principal actual de la app EcoFlow (diagrama de energía + panelcito de planta), una por artboard.",
+  "artboards": [
+    {
+      "file": "01-liquid-battery.html",
+      "title": "1 · Batería líquida",
+      "tradeoff": "Estado de carga legible de un vistazo, con ola animada y marca del 15%; el anillo de progreso exacto se pierde.",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "05-night-timeline.html",
+      "title": "5 · Línea de tiempo de la noche",
+      "tradeoff": "Explica de un vistazo por qué hace falta la planta (22:00 vs 23:27); añade una pieza más a una pantalla ya densa.",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "06-ambient-night.html",
+      "title": "6 · Ambiente nocturno",
+      "tradeoff": "El fondo cuenta la hora (cielo, luna, estrellas) y da calidez; es decorativo y hay que cuidar el contraste y el consumo de batería.",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "07-zoned-ring.html",
+      "title": "7 · Anillo con zonas de color",
+      "tradeoff": "La banda amarilla cubre desde la reserva (15%) hasta la meta (73,6%) que hace falta para llegar al amanecer; verde = meta alcanzada.",
+      "width": 390,
+      "height": 844
+    }
+  ]
+}

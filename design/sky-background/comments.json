@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "comments": [
+    {
+      "id": "627f56lv",
+      "file": "22-franja-ventana-vivo.html",
+      "selector": "body > svg",
+      "excerpt": "Sale 06:44Se pone 17:45",
+      "comment": "ponlo abajo",
+      "createdAt": "2026-11-16T13:32:38.707Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T13:36:24.294Z",
+      "resolvedAt": "2026-11-16T13:38:01.588Z",
+      "resolution": "«Sale · Se pone» está al pie de la pantalla, centrado, en una sola línea (ya aplicado)."
+    },
+    {
+      "id": "qyoxk9vx",
+      "file": "23-ventana-abajo-vivo.html",
+      "selector": "body > div:nth-of-type(4) > div:nth-of-type(7) > span:nth-of-type(2)",
+      "excerpt": "Meta 73.6%",
+      "comment": "esto la meta ponla fuera del circulo",
+      "createdAt": "2026-11-16T13:49:48.619Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T13:50:25.265Z",
+      "resolvedAt": "2026-11-16T13:51:02.207Z",
+      "resolution": "Meta fuera del círculo con conector; «15% a las 23:27» restaurado en rojo; zona ámbar ahora amarilla (#ca8a04→#eab308)."
+    },
+    {
+      "id": "m85igpta",
+      "file": "23-ventana-abajo-vivo.html",
+      "selector": "body > div:nth-of-type(4) > div:nth-of-type(7) > span:nth-of-type(1)",
+      "excerpt": "15%",
+      "comment": "dejalo como estaba el 15% a las x",
+      "createdAt": "2026-11-16T13:50:05.198Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T13:50:25.265Z",
+      "resolvedAt": "2026-11-16T13:51:02.207Z",
+      "resolution": "Meta fuera del círculo con conector; «15% a las 23:27» restaurado en rojo; zona ámbar ahora amarilla (#ca8a04→#eab308)."
+    },
+    {
+      "id": "ipm8ilgx",
+      "file": "23-ventana-abajo-vivo.html",
+      "selector": "body > div:nth-of-type(4) > div:nth-of-type(7) > div",
+      "excerpt": "62.0% Tiempo para llenar 1h 04min Llena a las 09:54",
+      "comment": "es amarillo no naranja",
+      "createdAt": "2026-11-16T13:50:18.706Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T13:50:25.265Z",
+      "resolvedAt": "2026-11-16T13:51:02.207Z",
+      "resolution": "Meta fuera del círculo con conector; «15% a las 23:27» restaurado en rojo; zona ámbar ahora amarilla (#ca8a04→#eab308)."
+    },
+    {
+      "id": "0a3h873m",
+      "file": "23-ventana-abajo-vivo.html",
+      "selector": "body > div:nth-of-type(4) > div:nth-of-type(7) > span",
+      "excerpt": "Meta 73.6%",
+      "comment": "quitalo",
+      "createdAt": "2026-11-16T13:51:48.942Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T13:52:09.702Z",
+      "resolvedAt": "2026-11-16T13:52:24.596Z",
+      "resolution": "Quitada la etiqueta «Meta 73.6%» y la línea roja «15% a las 23:27» del texto central (23)."
+    },
+    {
+      "id": "ra6c599g",
+      "file": "23-ventana-abajo-vivo.html",
+      "selector": "body > div:nth-of-type(4) > div:nth-of-type(7) > div",
+      "excerpt": "62.0% Tiempo para llenar 1h 04min Llena a las 09:56 15% a las 23:27",
+      "comment": "no entiendo poque pones la linea roja al final",
+      "createdAt": "2026-11-16T13:52:07.810Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T13:52:09.702Z",
+      "resolvedAt": "2026-11-16T13:52:24.597Z",
+      "resolution": "Quitada la etiqueta «Meta 73.6%» y la línea roja «15% a las 23:27» del texto central (23)."
+    },
+    {
+      "id": "3y5tlcij",
+      "file": "35-sin-carga-meta-cumplida.html",
+      "selector": "body > div:nth-of-type(4) > div:nth-of-type(7) > div",
+      "excerpt": "85.0% Tiempo restante 14h 29min Dura hasta las 11:54 15% a las 09:22",
+      "comment": "ese fondo de la esfera de otro color porque ?",
+      "createdAt": "2026-11-16T14:29:40.080Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T14:29:43.182Z",
+      "resolvedAt": "2026-11-16T14:29:57.111Z",
+      "resolution": "Quitado el halo oscuro tras el texto de la esfera en el 35; ahora el verde es uniforme."
+    }
+  ]
+}
