@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>04 · Ajustar arco del sol</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:20px;background:#090d12;color:#e6edf3;font:14px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif}
+main{width:420px}
+h1{font-size:16px;margin:0 0 4px}
+.lead{margin:0 0 14px;color:#9aa7b3;font-size:12px}
+.card{position:relative;width:390px;height:116px;overflow:hidden;border-radius:26px;border:1px solid rgba(255,255,255,.18);background:linear-gradient(#527da0 0%,#9fbcc4 64%);box-shadow:0 12px 34px #0006}
+.card svg{position:absolute;inset:0;width:100%;height:100%}
+.chip{position:absolute;z-index:3;left:50%;bottom:0;transform:translateX(-50%);display:flex;align-items:center;gap:7px;padding:6px 13px;border:1px solid #ffffff3d;border-radius:99px;background:#101b27d9;color:#f4f7fa;font-size:12px;font-weight:600;white-space:nowrap}
+.panel{margin-top:16px;padding:14px;border:1px solid #243040;border-radius:16px;background:#121921}
+.row{display:grid;grid-template-columns:118px 1fr 48px;align-items:center;gap:10px;margin-bottom:12px}
+.row label{font-size:12px;color:#c3ced8}
+.row output{font-variant-numeric:tabular-nums;text-align:right;font-weight:700;font-size:13px}
+input[type=range]{width:100%;accent-color:#f5c542;min-height:28px}
+input[type=range]:focus-visible,button:focus-visible,textarea:focus-visible{outline:2px solid #22c55e;outline-offset:2px}
+.btns{display:flex;gap:8px;margin-top:4px}
+button{font:inherit;font-weight:600;cursor:pointer;color:#e6edf3;background:#1b2531;border:1px solid #2c3a4b;border-radius:10px;padding:9px 14px;min-height:40px}
+button.primary{background:#1f6b3a;border-color:#2e8b50}
+textarea{width:100%;height:118px;margin-top:12px;resize:vertical;background:#0b1118;color:#c3ced8;border:1px solid #243040;border-radius:10px;padding:10px;font:11px/1.45 ui-monospace,Menlo,monospace}
+.status{min-height:18px;margin-top:8px;font-size:12px;color:#7ee0a0}
+.hint{margin:0 0 12px;font-size:11px;color:#8896a4}
+</style>
+<body><main>
+<h1>Ajustar el arco del sol</h1>
+<p class="lead">Mueve los controles y mira el panel en vivo. Cuando quede bien, copia el prompt y pégalo para que lo aplique en la app.</p>
+
+<div class="card" role="img" aria-label="Vista previa del panel del clima con el arco del sol">
+<svg viewBox="0 0 390 116" preserveAspectRatio="none" aria-hidden="true"><defs>
+<radialGradient id="sun"><stop stop-color="#fffbe3"/><stop offset=".45" stop-color="#ffe9aa" stop-opacity=".9"/><stop offset="1" stop-color="#ffe9aa" stop-opacity="0"/></radialGradient>
+<linearGradient id="sea" x2="0" y2="1"><stop stop-color="#a8d0cf" stop-opacity=".78"/><stop offset="1" stop-color="#325967" stop-opacity=".95"/></linearGradient></defs>
+<g transform="translate(0 -12)">
+<path id="dots" fill="none" stroke="#fff" stroke-opacity=".38" stroke-width="3" stroke-linecap="round" stroke-dasharray="0.1 8"/>
+<path id="elapsed" fill="none" stroke="#fff0ba" stroke-opacity=".85" stroke-width="2.5" stroke-linecap="round"/>
+<g id="sunG"><circle r="44" fill="url(#sun)"/><circle r="13" fill="#fff7d3"/></g>
+<g fill="#f2f6f7" opacity=".85">
+<g transform="translate(60 56) scale(.7)"><ellipse rx="40" ry="14"/><ellipse cx="-22" cy="-8" rx="20" ry="12"/><ellipse cx="14" cy="-12" rx="26" ry="14"/><ellipse cx="34" cy="-3" rx="18" ry="10"/></g>
+<g transform="translate(250 40) scale(.8)"><ellipse rx="40" ry="14"/><ellipse cx="-22" cy="-8" rx="20" ry="12"/><ellipse cx="14" cy="-12" rx="26" ry="14"/><ellipse cx="34" cy="-3" rx="18" ry="10"/></g>
+</g></g>
+<path d="M0 75Q70 72 138 75T274 74Q336 71 390 75V116H0Z" fill="url(#sea)"/>
+<path d="M0 74Q18 67 38 71Q51 73 66 77Q35 80 0 81Z" fill="#3f6a6a"/>
+<path d="M390 74Q371 67 352 71Q338 73 324 77Q355 80 390 81Z" fill="#3f6a6a"/>
+</svg>
+<div class="chip"><span aria-hidden="true">☀️</span> Parcialmente nublado</div>
+</div>
+
+<section class="panel" aria-label="Controles del arco">
+<p class="hint">Coordenadas del escenario de la app (390 × 150, desplazado −12 px dentro de la tarjeta).</p>
+<div class="row"><label for="ry">Altura del arco</label><input id="ry" type="range" min="30" max="100" step="1" data-k="ry"><output for="ry" id="o_ry"></output></div>
+<div class="row"><label for="rx">Ancho del arco</label><input id="rx" type="range" min="90" max="185" step="1" data-k="rx"><output for="rx" id="o_rx"></output></div>
+<div class="row"><label for="base">Línea base</label><input id="base" type="range" min="60" max="125" step="1" data-k="base"><output for="base" id="o_base"></output></div>
+<div class="row"><label for="h">Hora del sol</label><input id="h" type="range" min="6.72" max="17.73" step="0.01" data-k="h"><output for="h" id="o_h"></output></div>
+<div class="btns"><button type="button" class="primary" id="copy">Copiar como prompt</button><button type="button" id="reset">Restablecer</button></div>
+<div class="status" id="status" role="status" aria-live="polite"></div>
+<textarea id="prompt" readonly aria-label="Prompt generado"></textarea>
+</section>
+</main>
+<script>
+const DEF={rx:130,ry:60,base:88,h:11.3},CX=195,SR=6.72,SS=17.73;
+const S={...DEF};
+const $=id=>document.getElementById(id);
+const fmt=h=>{const m=Math.round(h*60);return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');};
+function promptText(){
+  const x0=CX-S.rx,x1=CX+S.rx;
+  return 'Ajusta el arco del sol en ecoflow-monitor-app, sin tocar horarios ni datos del clima.\n'+
+  '- lib/sky.ts, pos(p): x = 195 - '+S.rx+' * cos(PI*p); y = '+S.base+' - '+S.ry+' * sin(PI*p).\n'+
+  '- lib/sky.ts, elapsedPath(p): empieza en "M'+x0+' '+S.base+'" con "A'+S.rx+' '+S.ry+'".\n'+
+  '- components/SkyPanel.tsx, trazo punteado: d="M'+x0+' '+S.base+' A'+S.rx+' '+S.ry+' 0 0 1 '+x1+' '+S.base+'".\n'+
+  'Coordenadas del escenario 390x150 (STAGE_TOP -12). Las nubes siguen arriba del horizonte.';
+}
+function render(){
+  const x0=CX-S.rx,x1=CX+S.rx,p=Math.min(1,Math.max(0,(S.h-SR)/(SS-SR)));
+  $('dots').setAttribute('d','M'+x0+' '+S.base+' A'+S.rx+' '+S.ry+' 0 0 1 '+x1+' '+S.base);
+  const sx=CX-S.rx*Math.cos(Math.PI*p),sy=S.base-S.ry*Math.sin(Math.PI*p);
+  $('elapsed').setAttribute('d',p<.005?'':'M'+x0+' '+S.base+' A'+S.rx+' '+S.ry+' 0 '+(p>.5?1:0)+' 1 '+sx.toFixed(1)+' '+sy.toFixed(1));
+  $('sunG').setAttribute('transform','translate('+sx.toFixed(1)+' '+sy.toFixed(1)+')');
+  for(const k of ['rx','ry','base']){$(k).value=S[k];$('o_'+k).textContent=S[k];}
+  $('h').value=S.h;$('o_h').textContent=fmt(S.h);
+  $('prompt').value=promptText();
+}
+document.querySelectorAll('input[type=range]').forEach(el=>el.addEventListener('input',()=>{S[el.dataset.k]=parseFloat(el.value);render();}));
+$('reset').addEventListener('click',()=>{Object.assign(S,DEF);$('status').textContent='Valores restablecidos.';render();});
+$('copy').addEventListener('click',async()=>{
+  const t=promptText();
+  try{await navigator.clipboard.writeText(t);$('status').textContent='Prompt copiado.';}
+  catch(e){$('prompt').select();document.execCommand&&document.execCommand('copy');$('status').textContent='Prompt seleccionado: cópialo con Cmd+C.';}
+});
+render();
+</script></html>

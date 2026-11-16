@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "comments": [
+    {
+      "id": "05niso8e",
+      "file": "02-costa-abierta.html",
+      "selector": "body > main > svg > path:nth-of-type(2)",
+      "excerpt": "",
+      "comment": "continua este mismo arco que salga de atras de la montaña y recorra todo el cielo hasta la otra",
+      "createdAt": "2026-11-16T16:06:03.157Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T16:06:07.177Z",
+      "resolvedAt": "2026-11-16T16:07:50.625Z",
+      "resolution": "El arco ahora es una sola curva que sale de detrás de la montaña izquierda y cruza todo el cielo hasta esconderse tras la derecha; el sol queda exactamente sobre ella."
+    }
+  ]
+}

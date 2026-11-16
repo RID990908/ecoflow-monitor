@@ -4,6 +4,7 @@
   "artboards": [
     { "file": "01-colinas-suaves.html", "title": "01 · Colinas suaves", "tradeoff": "Dos lomas orgánicas aportan profundidad y dejan despejado el arco; paisaje tranquilo, menos distintivo.", "width": 390, "height": 180 },
     { "file": "02-costa-abierta.html", "title": "02 · Costa abierta", "tradeoff": "Horizonte marino y reflejo solar conectan con energía; más luminoso y con menos silueta terrestre.", "width": 390, "height": 180 },
-    { "file": "03-valle-en-capas.html", "title": "03 · Valle en capas", "tradeoff": "Capas atmosféricas dan más profundidad y color; es el más expresivo y también el más decorativo.", "width": 390, "height": 180 }
+    { "file": "03-valle-en-capas.html", "title": "03 · Valle en capas", "tradeoff": "Capas atmosféricas dan más profundidad y color; es el más expresivo y también el más decorativo.", "width": 390, "height": 180 },
+    { "file": "04-ajustar-arco-sol.html", "title": "04 · Ajustar arco del sol", "tradeoff": "Sliders de altura, ancho, línea base y hora sobre el panel costero actual, con «Copiar como prompt»; sirve para afinar a ojo, no es una propuesta cerrada.", "width": 450, "height": 560 }
   ]
 }
