@@ -1,95 +1,11 @@
 {
   "title": "Fondo cielo: ventana del clima abajo",
-  "brief": "El fondo como cielo en tiempo real: sol que recorre su arco desde que sale hasta que se pone, luna con su fase real de noche, y nubosidad. La pantalla actual, incluido «15% a las 23:27», no cambia.",
+  "brief": "El fondo como cielo en tiempo real: sol que recorre su arco desde que sale hasta que se pone, luna con su fase real de noche, y nubosidad.",
   "artboards": [
     {
       "file": "23-ventana-abajo-vivo.html",
-      "title": "23 · Ventana del clima abajo (en vivo)",
-      "tradeoff": "El panel del cielo (sol, luna, clima y horas) pasa bajo el diagrama; el diagrama sube y arriba solo queda el encabezado. Se lee primero lo energético y el clima acompaña.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "24-estado-amanecer.html",
-      "title": "24 · Amanecer (06:55)",
-      "tradeoff": "El sol asoma por la izquierda y el cielo pasa de violeta a naranja; solo entra AC.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "25-estado-ma-ana-despejada.html",
-      "title": "25 · Mañana despejada (09:30)",
-      "tradeoff": "Sol subiendo con cielo azul; entran AC y sol.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "26-estado-mediod-a-parcialmente-nublado.html",
-      "title": "26 · Mediodía parcialmente nublado (12:15)",
-      "tradeoff": "Sol en lo alto con algunas nubes; el sol aporta algo menos.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "27-estado-tarde-nublada.html",
-      "title": "27 · Tarde nublada (15:00)",
-      "tradeoff": "Cielo gris y sol difuso; poca entrada solar.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "28-estado-atardecer.html",
-      "title": "28 · Atardecer (17:25)",
-      "tradeoff": "El sol llega a la derecha con tonos cálidos; la entrada solar cae.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "29-estado-noche-despejada.html",
-      "title": "29 · Noche despejada (21:25)",
-      "tradeoff": "Luna con su fase real y estrellas; solo entra AC.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "30-estado-noche-nublada.html",
-      "title": "30 · Noche nublada (23:30)",
-      "tradeoff": "La luna queda velada y no hay estrellas.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "31-estado-lluvia.html",
-      "title": "31 · Lluvia (12:15)",
-      "tradeoff": "Cielo gris con gotas en el panel; el sol casi no aporta.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "32-estado-tormenta.html",
-      "title": "32 · Tormenta (16:30)",
-      "tradeoff": "Cielo oscuro con lluvia densa y un relámpago suave.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "33-estado-niebla.html",
-      "title": "33 · Niebla (06:55)",
-      "tradeoff": "El panel se lava con bruma y el sol queda difuso.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "34-sin-carga-meta-en-riesgo.html",
-      "title": "34 · Sin carga y meta en riesgo: esfera amarilla",
-      "tradeoff": "Sin entradas y la batería no llega al amanecer con la reserva: toda la esfera se pone amarilla y se ve la planta pendiente.",
-      "width": 390,
-      "height": 844
-    },
-    {
-      "file": "35-sin-carga-meta-cumplida.html",
-      "title": "35 · Sin carga y meta cumplida: esfera verde",
-      "tradeoff": "Sin entradas pero la batería sí llega al amanecer con la reserva: toda la esfera en verde y «Sin planta».",
+      "title": "Ventana del clima abajo (en vivo)",
+      "tradeoff": "El panel del cielo pasa bajo el diagrama y deja el sol, la luna y el clima visibles sin competir con los datos energéticos.",
       "width": 390,
       "height": 844
     }
