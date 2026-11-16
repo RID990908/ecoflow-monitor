@@ -1,0 +1,9 @@
+{
+  "title": "Paisajes para el panel del clima",
+  "brief": "Tres fondos alternativos para el panel meteorológico de EcoFlow. Mantener el arco solar, las nubes y el chip de clima legibles; mejorar la composición del horizonte sin recargar el panel.",
+  "artboards": [
+    { "file": "01-colinas-suaves.html", "title": "01 · Colinas suaves", "tradeoff": "Dos lomas orgánicas aportan profundidad y dejan despejado el arco; paisaje tranquilo, menos distintivo.", "width": 390, "height": 180 },
+    { "file": "02-costa-abierta.html", "title": "02 · Costa abierta", "tradeoff": "Horizonte marino y reflejo solar conectan con energía; más luminoso y con menos silueta terrestre.", "width": 390, "height": 180 },
+    { "file": "03-valle-en-capas.html", "title": "03 · Valle en capas", "tradeoff": "Capas atmosféricas dan más profundidad y color; es el más expresivo y también el más decorativo.", "width": 390, "height": 180 }
+  ]
+}
