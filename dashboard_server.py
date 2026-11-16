@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import mqtt_client
 import shared_state
+import weather
 from shared_state import ECOFLOW_READY, SN_DELTA2, TZ, log
 
 
@@ -818,6 +819,33 @@ def _plant_plan(now_local, soc_pct, out_w, has_ac, capacity_wh, reserve_pct, cha
     return plan
 
 
+def _sphere_state(now_local, soc_pct, in_w, out_w, capacity_wh, reserve_pct, night_load_w=None):
+    """Estado de la esfera de batería de la app.
+
+    - "charging": entra más de lo que sale (AC o sol): la batería está subiendo.
+    - "at_risk": no carga y, al ritmo de consumo nocturno esperado, la batería
+      NO llega a las 08:00 con la reserva (esfera toda amarilla).
+    - "ok": no carga pero sí llega a las 08:00 con la reserva.
+    La proyección supone que no entra nada más hasta el amanecer (peor caso).
+    `dawn_pct` es el % proyectado a las 08:00 (None si está cargando).
+    Devuelve None sin datos suficientes."""
+    if soc_pct is None or out_w is None:
+        return None
+    base = {"state": None, "dawn_pct": None, "reserve_pct": reserve_pct}
+    if (in_w or 0) > out_w:
+        base["state"] = "charging"
+        return base
+    dawn = now_local.replace(hour=shared_state.PLANT_QUIET_END_HOUR, minute=0, second=0, microsecond=0)
+    if dawn <= now_local:
+        dawn += timedelta(days=1)
+    hours = (dawn - now_local).total_seconds() / 3600
+    load_w = max(1.0, night_load_w) if night_load_w is not None else max(1.0, out_w)
+    projected = max(0.0, soc_pct - load_w * hours / capacity_wh * 100)
+    base["dawn_pct"] = round(projected, 1)
+    base["state"] = "ok" if projected >= reserve_pct else "at_risk"
+    return base
+
+
 def get_dashboard_status(utc_offset_min=None) -> dict:
     if not ECOFLOW_READY:
         return {"ready": False, "error": "EcoFlow todavía no está configurado"}
@@ -848,6 +876,18 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
         "delta2_remain": battery_view["delta2_remain"],
         "extra_remain": battery_view["extra_remain"],
         "has_ac": m["has_ac"],
+        # Clima y horas de sol para el fondo "cielo" de la app. None mientras no
+        # haya datos (arranque, WEATHER_ENABLED=false); nunca bloquea el pedido.
+        "sky": weather.get_sky(),
+        "sphere": _sphere_state(
+            now,
+            battery_view["percent"],
+            m["total_in_w"],
+            m["out_w"],
+            BATTERY_CAPACITY_WH * 2,
+            shared_state.BATTERY_LOW_THRESHOLD,
+            night_load_w,
+        ),
         "plant_plan": _plant_plan(
             now,
             battery_view["percent"],
@@ -1625,6 +1665,7 @@ class _DashboardHandler(http.server.BaseHTTPRequestHandler):
 
 
 def run_dashboard_server() -> None:
+    weather.get_sky()  # primera consulta de clima en segundo plano, antes del primer pedido
     server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), _DashboardHandler)
     log.info("Dashboard web escuchando en el puerto %d", PORT)
     server.serve_forever()

@@ -102,6 +102,11 @@ Como alternativa se usa la misma API que usa la app móvil de EcoFlow ("Private 
 | `QUIET_END_HOUR` / `QUIET_END_MINUTE` | Fin del horario silencioso (default: 07:00) |
 | `AC_CHARGE_W` | Velocidad de carga por AC de la EcoFlow en W (la planta entrega lo que la EcoFlow le pide), para el `plant_plan` del dashboard (default: 1200). Mientras corre la planta el backend mide el pico de vatios que entran por CA y, una vez medido, usa ese valor en vez de este |
 | _(automático)_ | El `plant_plan` aprende tu consumo por hora del día (muestra cada minuto, se guarda en el estado persistido) y usa el consumo medio esperado de 22:00 a 08:00 en vez de la salida instantánea; sin datos suficientes usa la salida actual |
+| `WEATHER_ENABLED` | `false` apaga el clima del fondo (`sky` queda en `null` y no se hace ninguna llamada de red) (default: `true`) |
+| `WEATHER_LAT` / `WEATHER_LON` | Coordenadas para el clima y las horas de sol (default: La Habana, `23.1` / `-82.37`) |
+| `WEATHER_REFRESH_MIN` | Minutos entre consultas a Open-Meteo (default: 15). Sin API key; si falla, se conserva el último dato y se reintenta a los 2 min |
+| _(automático)_ | `/api/status` incluye `sky` (`cloud_pct` 0-100, `code` WMO, `is_day`, `sunrise_ts`, `sunset_ts`, `updated_ts`) para que la app dibuje el cielo; es `null` hasta que llega el primer dato |
+| _(automático)_ | `/api/status` incluye `sphere` (`state`: `charging` si entra más de lo que sale, `at_risk` si no carga y no llega a las 08:00 con la reserva, `ok` si sí llega; `dawn_pct`: % proyectado a las 08:00; `reserve_pct`) para pintar la esfera de batería |
 | `WEEKLY_CLEANUP_WEEKDAY` / `WEEKLY_CLEANUP_HOUR` | Día/hora de la limpieza semanal (default: domingo 4 AM) |
 | `DASHBOARD_URL` | URL pública del dashboard (para el botón "📊 Panel" en Telegram) |
 | `PORT` | Puerto del servidor del dashboard (lo define Railway automáticamente) |
