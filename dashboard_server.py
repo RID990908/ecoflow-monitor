@@ -835,6 +835,12 @@ def _sphere_state(now_local, soc_pct, in_w, out_w, capacity_wh, reserve_pct, nig
     if (in_w or 0) > out_w:
         base["state"] = "charging"
         return base
+    # A full battery is visually healthy even when the charger is only
+    # balancing the current load (input equals output). Do not show a full
+    # yellow warning sphere for a battery that cannot discharge further.
+    if soc_pct >= 100:
+        base["state"] = "ok"
+        return base
     dawn = now_local.replace(hour=shared_state.PLANT_QUIET_END_HOUR, minute=0, second=0, microsecond=0)
     if dawn <= now_local:
         dawn += timedelta(days=1)

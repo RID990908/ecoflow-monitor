@@ -45,6 +45,9 @@ class SphereStateTests(unittest.TestCase):
     def test_input_equal_to_output_is_not_charging(self):
         self.assertEqual(sphere(62, 120, 120)["state"], "at_risk")
 
+    def test_full_battery_is_ok_when_input_equals_output(self):
+        self.assertEqual(sphere(100, 120, 120)["state"], "ok")
+
     def test_uses_expected_night_load_over_instant_output(self):
         # salida instantánea alta, pero el consumo nocturno esperado es bajo -> sí llega
         self.assertEqual(sphere(62, 0, 600, night_load=60)["state"], "ok")
