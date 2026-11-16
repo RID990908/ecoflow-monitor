@@ -25,9 +25,14 @@ from zoneinfo import ZoneInfo
 
 # Railway corre en UTC; esto es lo que usan tanto los timestamps de cara al
 # usuario (ETA de autonomía, bloques del plan de cargas) como el formatter de
-# logging de acá abajo, para que ambos coincidan. zoneinfo maneja el horario
-# de verano de Cuba automáticamente.
-TZ = ZoneInfo(os.environ.get("TZ_NAME", "America/Havana"))
+# logging de acá abajo, para que ambos coincidan.
+# Cuba no volvió a la hora estándar en noviembre: los relojes reales (teléfono,
+# pared) van en UTC-4 y las bases de zonas (incluida la de Railway y la de
+# Open-Meteo) se equivocan y dicen UTC-5. Por eso el valor por defecto es una
+# zona fija UTC-4 ("Etc/GMT+4": el signo está invertido a propósito en el nombre),
+# que no tiene horario de verano y coincide en el servidor y en Open-Meteo.
+# Cuando Cuba cambie la hora de verdad: TZ_NAME=America/Havana (o la zona que sea).
+TZ = ZoneInfo(os.environ.get("TZ_NAME", "Etc/GMT+4"))
 
 
 class _HavanaFormatter(logging.Formatter):
