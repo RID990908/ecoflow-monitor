@@ -84,6 +84,18 @@
       "sentAt": "2026-11-16T14:29:43.182Z",
       "resolvedAt": "2026-11-16T14:29:57.111Z",
       "resolution": "Quitado el halo oscuro tras el texto de la esfera en el 35; ahora el verde es uniforme."
+    },
+    {
+      "id": "zg8ps0e5",
+      "file": "35-sin-carga-meta-cumplida.html",
+      "selector": "body > div:nth-of-type(4) > div:nth-of-type(7) > div",
+      "excerpt": "85.0% Tiempo restante 14h 29min Dura hasta las 11:54 15% a las 09:22",
+      "comment": "la esfera no va contenida dentro de otro circulo?",
+      "createdAt": "2026-11-16T14:48:47.775Z",
+      "status": "resolved",
+      "sentAt": "2026-11-16T14:48:50.491Z",
+      "resolvedAt": "2026-11-16T14:49:52.362Z",
+      "resolution": "Añadí un círculo exterior visible para contener la esfera líquida y separar claramente el marco del contenido."
     }
   ]
 }
