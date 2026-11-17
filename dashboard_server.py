@@ -79,6 +79,13 @@ def get_extra_battery_soc(data: dict):
     return _pick(data, "bms_slave.f32ShowSoc", "bms_slave.soc")
 
 
+def get_min_discharge_soc(data: dict):
+    """Límite inferior de descarga configurado en el equipo (0-30 %): al
+    llegar ahí la batería deja de entregar. 0 = límite quitado; None = el
+    equipo no mandó el campo."""
+    return _pick(data, "bms_emsStatus.minDsgSoc")
+
+
 def _charge_source(pv_w, ac_present, ac_w, system_net_w) -> tuple:
     """(verbo, emoji) de qué está alimentando al sistema (Delta 2 + batería
     extra) en este momento: corriente de la calle > solar (solo o + batería
@@ -342,6 +349,7 @@ def _gather_metrics(passive: bool = False) -> dict:
     return {
         "soc_delta2": soc_delta2,
         "soc_extra": soc_extra,
+        "min_dsg_soc": get_min_discharge_soc(data),
         "avg_soc": avg_soc,
         "delta2_net_w": delta2_net_w,
         "extra_net_w": extra_net_w,
@@ -873,6 +881,7 @@ def get_dashboard_status(utc_offset_min=None) -> dict:
         "percent": battery_view["percent"],
         "soc_delta2": m["soc_delta2"],
         "soc_extra": m["soc_extra"],
+        "min_dsg_soc": m["min_dsg_soc"],
         "source_verb": m["source_verb"],
         "source_emoji": m["source_emoji"],
         "pv_w": m["pv_w"] or 0,
